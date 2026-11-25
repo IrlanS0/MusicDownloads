@@ -73,6 +73,8 @@ Uma falha individual nao deve cancelar toda a remessa. Implementar novas tentati
 
 Persistir pendencias em `downloads/retomada.json` antes de iniciar o processamento e atualizar a cada resultado. Preservar falhas e interrupcoes, remover sucessos e conservar itens de outras remessas. Cada faixa guarda album, nome, URL, configuracoes, formato, qualidade, destino e diretorio de estado para retomada.
 
+Na retomada interativa, oferecer a troca opcional de URLs, mostrar album/nome/link atual, aceitar Enter para manter e validar antes de salvar. Persistir a substituicao na fila sem conservar o item com a URL antiga. `-y` pula a edicao. Arquivos CSV/TXT/YAML originais permanecem intactos.
+
 ## Comportamento de download
 
 Receber uma URL nao significa que o download sempre funcionara. O programa deve tentar processa-la e apresentar um resultado explicito. Possiveis impedimentos incluem:

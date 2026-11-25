@@ -8,10 +8,29 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from remessa_musicas.cli import build_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, read_song_list, run_song
+from remessa_musicas.cli import build_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, read_song_list, retry_entry, logs_for_file, run_song
 
 
 class CommandTests(unittest.TestCase):
+    # Confere que editar a retomada CSV atualiza a fila sem modificar o arquivo original.
+    def test_resume_csv_edits_url(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "lista.csv"
+            content = "album,nome,url\nÁlbum,Faixa,https://youtu.be/old\n"
+            source.write_text(content, encoding="utf-8")
+            manifest = read_song_list(source)
+            with patch("pathlib.Path.cwd", return_value=root):
+                logs = logs_for_file(source)
+                queue = root / "downloads" / "retomada.json"
+                queue.parent.mkdir()
+                queue.write_text(json.dumps({"version": 1, "items": [retry_entry(manifest["songs"][0], manifest, root / "audio", logs)]}))
+                with patch("remessa_musicas.cli.check_tools", return_value=True), patch("remessa_musicas.cli.execute_with_loading", return_value=False) as run, patch("builtins.input", side_effect=["s", "s", "https://youtu.be/new"]):
+                    self.assertEqual(main(["-r", "-dir", str(source), "-de", str(root / "audio")]), 1)
+            self.assertEqual(run.call_args.args[0]["songs"][0]["url"], "https://youtu.be/new")
+            self.assertEqual(json.loads(queue.read_text())["items"][0]["url"], "https://youtu.be/new")
+            self.assertEqual(source.read_text(encoding="utf-8"), content)
+
     # Confere o cadastro interativo e o download imediato sem invocar ferramentas externas.
     def test_add_single(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -255,7 +274,14 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await asyncio.to_thread(main, ["-r", "-y"]), 0)
                 remaining = json.loads(default_queue.read_text())["items"]
                 self.assertEqual(len(remaining), 1)
-                self.assertEqual(await asyncio.to_thread(main, ["-r", "-dir", "-y"]), 0)
+                with patch("remessa_musicas.cli.run_song", fail), patch("builtins.input", side_effect=["s", "s", "https://example.com/invalido", "https://youtu.be/replacement"]), patch("sys.stderr", new_callable=io.StringIO) as warnings:
+                    self.assertEqual(await asyncio.to_thread(main, ["-r", "-dir"]), 1)
+                edited = json.loads(default_queue.read_text())["items"]
+                self.assertEqual(len(edited), 1)
+                self.assertEqual(edited[0]["url"], "https://youtu.be/replacement")
+                self.assertIn("somente URLs HTTPS do YouTube", warnings.getvalue())
+                with patch("builtins.input", side_effect=["s", "s", ""]):
+                    self.assertEqual(await asyncio.to_thread(main, ["-r", "-dir", str(default_queue)]), 0)
                 self.assertEqual(json.loads(default_queue.read_text())["items"], [])
                 self.assertEqual(await asyncio.to_thread(main, ["-r", "-dir", str(default_queue), "-y"]), 0)
 

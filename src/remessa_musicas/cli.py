@@ -401,6 +401,14 @@ def resume_queue(args):
     if not items:
         print("Nenhuma música pendente para retomar.")
         return 0
+    if not check_tools():
+        return 1
+    if not args.yes:
+        if input(f"Retomar {len(items)} música(s)? [s/N] ").strip().casefold() not in {"s", "sim"}:
+            print("Cancelado.")
+            return 0
+        edit_retry_links(items)
+        write_state(path, queue)
     groups = {}
     for item in items:
         manifest = manifest_from_retry(item)
@@ -412,11 +420,6 @@ def resume_queue(args):
         else:
             manifest["_retry_file"] = path
             groups[key] = (manifest, destination, logs)
-    if not check_tools():
-        return 1
-    if not args.yes and input(f"Retomar {len(items)} música(s)? [s/N] ").strip().casefold() not in {"s", "sim"}:
-        print("Cancelado.")
-        return 0
     if args.destination:
         # A alteração de destino também atualiza os itens originais da fila.
         for item in items:
@@ -426,6 +429,43 @@ def resume_queue(args):
     for manifest, destination, logs in groups.values():
         success = asyncio.run(execute_with_loading(manifest, destination, True, logs)) and success
     return 0 if success else 1
+
+
+# Oferece a troca de URLs da retomada e repete a pergunta se o novo link for inválido.
+def edit_retry_links(items):
+    if input("Deseja alterar algum link antes de retomar? [s/N] ").strip().casefold() not in {"s", "sim"}:
+        return
+    for item in items:
+        print(f"[{item['album']} / {item['name']}] URL atual: {item['url']}")
+        while True:
+            url = input("Nova URL (Enter mantém a atual): ").strip()
+            if not url:
+                break
+            candidate = {**item, "url": url}
+            try:
+                manifest_from_retry(candidate)
+            except ValueError as exc:
+                print(f"Aviso: {exc}", file=sys.stderr)
+                continue
+            item["url"] = url
+            break
+
+
+# Aplica a edição à remessa indicada e substitui suas URLs antigas na fila automática.
+def edit_manifest_links(manifest, destination, logs):
+    originals = [retry_entry(song, manifest, destination, logs) for song in manifest["songs"]]
+    items = [dict(item) for item in originals]
+    edit_retry_links(items)
+    changes = [(old, new) for old, new in zip(originals, items) if old != new]
+    if not changes:
+        return
+    path = Path.cwd() / "downloads" / "retomada.json"
+    queue = read_retry_queue(path)
+    for old, new in changes:
+        queue["items"] = [new if item == old else item for item in queue["items"]]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_state(path, queue)
+    manifest["songs"] = [manifest_from_retry(item)["songs"][0] for item in items]
 
 
 # Associa o resultado assíncrono à faixa que o produziu.
@@ -559,8 +599,10 @@ def main(argv=None):
         if not args.yes and input("Você tem autorização para baixar esses itens e deseja continuar? [s/N] ").strip().casefold() not in {"s", "sim"}:
             print("Cancelado.")
             return 0
+        if args.resume and not args.yes:
+            edit_manifest_links(manifest, destination, logs)
         return 0 if asyncio.run(execute_with_loading(manifest, destination, bool(args.resume), logs)) else 1
-    except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError, EOFError) as exc:
         print(f"Erro: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

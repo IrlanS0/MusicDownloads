@@ -97,6 +97,8 @@ musics -r remessa.yaml            # forma anterior continua disponível
 
 Use `-y` para dispensar a confirmação ou `-de PASTA` para escolher outro destino. Se não houver pendências, o programa informa isso e encerra sem baixar. O arquivo JSON é gerenciado pelo programa; conserve-o separado dos logs de sessão. Os arquivos de retomada são criados a partir das execuções desta versão; falhas anteriores podem ser processadas novamente com a lista original para entrar na fila.
 
+Na retomada interativa, após confirmar a execução, o programa pergunta se você deseja alterar algum link. Se responder `s`, mostra álbum, faixa e URL atual de cada item e pede uma nova URL. Pressione Enter para manter o link da faixa. Links inválidos geram um aviso e uma nova pergunta. A URL substituta é salva na fila de retomada e será usada nas próximas tentativas se a faixa falhar novamente. Isso funciona com `musics -r -dir`, com um arquivo indicado e também com `musics -r`. CSV, TXT e YAML originais não são alterados; para reutilizar a substituição, retome pela fila JSON. A opção `-y` pula a edição e usa os links já salvos.
+
 ### Adição interativa e importação de listas
 
 Depois de instalar ou atualizar o projeto com `pipx install --force --include-deps .`, execute `music add`. O programa pede o nome do álbum, o nome da faixa e a URL; valida os dados e inicia o download imediatamente em formato MP3 (192 kb/s). `musics add` também funciona.
