@@ -7,12 +7,53 @@ Aplicativo de terminal para organizar remessas de áudio de conteúdo que você 
 Requer Python 3.11+, `ffmpeg`/`ffprobe`, `pipx` e, para suporte completo ao YouTube, um runtime JavaScript compatível com `yt-dlp-ejs` (Deno é recomendado pelo projeto yt-dlp). Consulte a [documentação de EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS) para instalar/configurar o runtime.
 
 ```bash
+sudo apt update
 sudo apt install ffmpeg pipx
-pipx install .
+pipx ensurepath
+```
+
+Feche e abra o terminal após `pipx ensurepath`. Na raiz do projeto (onde fica `pyproject.toml`), instale:
+
+```bash
+pipx install --include-deps .
+yt-dlp --version
 musics -dg
 ```
 
-O pacote instala `yt-dlp[default]` com as dependências Python. Atualize-o regularmente com `pipx upgrade remessa-musicas`. Se o runtime for Node em vez de Deno, configure-o conforme a documentação oficial do yt-dlp.
+### Instalação do yt-dlp
+
+O comando `pipx install --include-deps .` instala o projeto e sua dependência `yt-dlp[default]`. A opção `--include-deps` disponibiliza também o executável `yt-dlp` no terminal, necessário porque o programa o chama como processo externo. Não é preciso instalar outra cópia quando essa opção é utilizada.
+
+Se você já instalou o projeto com `pipx install .` e o diagnóstico informa que `yt-dlp` está ausente, execute novamente na raiz do projeto:
+
+```bash
+pipx install --force --include-deps .
+yt-dlp --version
+musics -dg
+```
+
+Para atualizar apenas o yt-dlp dentro do ambiente do projeto:
+
+```bash
+pipx runpip remessa-musicas install --upgrade "yt-dlp[default]"
+yt-dlp --version
+```
+
+Para atualizar o projeto a partir dos arquivos locais, execute `pipx install --force --include-deps .` novamente após obter a versão desejada do código.
+
+Como alternativa, se preferir manter o executável do yt-dlp instalado separadamente, use os comandos abaixo **em vez** da instalação com `--include-deps`:
+
+```bash
+pipx install .
+pipx install "yt-dlp[default]"
+yt-dlp --version
+```
+
+Nessa alternativa, atualize o executável com `pipx upgrade yt-dlp`. Evite misturar os dois métodos para não criar conflitos entre executáveis com o mesmo nome.
+
+O extra `[default]` inclui as dependências Python recomendadas pelo yt-dlp, incluindo os componentes EJS; `ffmpeg`/`ffprobe` e o runtime JavaScript precisam ser instalados separadamente. Se o runtime for Node em vez de Deno, configure-o conforme a [documentação oficial de EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS).
+
+Referências: [instalação oficial do yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Installation) e [exposição de comandos das dependências pelo pipx](https://pipx.pypa.io/stable/how-to/expose-apps.html).
 
 ## Uso
 
