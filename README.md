@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Remessa de músicas
 
 Aplicativo de terminal para organizar remessas de áudio de conteúdo que você pode baixar. Uma URL acessível não garante autorização de uso ou sucesso do download. Respeite os direitos do titular e os termos da plataforma.
@@ -29,3 +30,6 @@ Os arquivos são salvos em `downloads/<pasta>/` no diretório de onde o comando 
 Até cinco itens podem ser baixados ao mesmo tempo e até dois convertidos. Valores menores podem ser definidos no YAML. `original` preserva o contêiner de áudio obtido, como `.webm` ou `.m4a`. Nos demais formatos, a conversão pode perder qualidade e um bitrate maior não recupera detalhes ausentes da fonte.
 
 Ao interromper com Ctrl+C, os downloads incompletos ficam em uma área de trabalho dentro da remessa; `retomar` reprocessa itens ainda não concluídos. O resultado final de cada item só é publicado após terminar a conversão. Atualizações da plataforma, indisponibilidade de vídeos e restrições de acesso podem causar falhas individuais.
+=======
+# MusicDownloads
+>>>>>>> 31942c584e0805b1adb7e4ac3234a76c1c5ea51e
