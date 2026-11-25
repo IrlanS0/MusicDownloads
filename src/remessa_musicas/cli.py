@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import hashlib
 import itertools
 import json
@@ -12,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.parse import urlparse
 
@@ -19,6 +21,41 @@ import yaml
 
 
 FORMATS = {"mp3", "m4a", "opus", "original"}
+
+
+# Resolve a pasta de músicas do usuário conforme o sistema operacional.
+def music_directory() -> Path:
+    home = Path.home()
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+        from uuid import UUID
+
+        # FOLDERID_Music: usa a localização real do Windows, inclusive pastas redirecionadas.
+        folder_id = UUID("4bd8d571-6d19-48d3-be97-422220080e43")
+        guid = (ctypes.c_ubyte * 16).from_buffer_copy(folder_id.bytes_le)
+        result = ctypes.c_wchar_p()
+        shell = ctypes.windll.shell32
+        shell.SHGetKnownFolderPath.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.HANDLE, ctypes.POINTER(ctypes.c_wchar_p)]
+        shell.SHGetKnownFolderPath.restype = ctypes.c_long
+        if shell.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(result)) == 0:
+            try:
+                return Path(result.value)
+            finally:
+                ctypes.windll.ole32.CoTaskMemFree(result)
+        raise OSError("não foi possível localizar a pasta Músicas do Windows")
+    if sys.platform == "darwin":
+        return home / "Music"
+    config = home / ".config" / "user-dirs.dirs"
+    if config.is_file():
+        for line in config.read_text(encoding="utf-8").splitlines():
+            match = re.fullmatch(r'\s*XDG_MUSIC_DIR="(.*)"\s*', line)
+            if match:
+                value = match.group(1).replace("$HOME", str(home))
+                path = Path(value)
+                if path.is_absolute() and (path == home or home in path.parents):
+                    return path
+    return home / "Music"
 
 
 # Valida e sanitiza nomes de arquivos e pastas.
@@ -154,55 +191,63 @@ async def loading_indicator():
 
 
 # Baixa e converte uma faixa, respeitando limites e novas tentativas.
-async def run_song(song, manifest, destination, download_limit, convert_limit):
+async def run_song(song, manifest, destination, download_limit, convert_limit, logs=None):
     key = song["key"]
-    temp = destination / ".trabalho" / key
-    temp.mkdir(parents=True, exist_ok=True)
-    log = temp / "execucao.log"
+    logs = logs or destination
+    log_dir = logs / key
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log = log_dir / "execucao.log"
     started = time.monotonic()
-    for attempt in range(1, manifest["config"]["attempts"] + 1):
-        try:
-            log_message(f"[{song['name']}] download (tentativa {attempt})")
-            async with download_limit:
-                # O template é fixo; cada item tem uma área isolada.
-                await process(["yt-dlp", "--ignore-config", "--no-playlist", "--no-overwrites", "--concurrent-fragments", "1", "-f", "bestaudio/best", "-o", str(temp / "audio.%(ext)s"), song["url"]], log)
-            candidates = [p for p in temp.glob("audio.*") if p.is_file() and not p.name.endswith((".part", ".ytdl")) and p.stat().st_size > 0]
-            if len(candidates) != 1:
-                raise RuntimeError("download não produziu exatamente um arquivo de áudio")
-            source = candidates[0]
-            async with convert_limit:
-                log_message(f"[{song['name']}] conversão")
-                fmt = manifest["format"]
-                extension = source.suffix if fmt == "original" else "." + fmt
-                target = destination / (song["name"] + extension)
-                if target.exists():
-                    raise RuntimeError(f"destino já existe: {target}; não foi sobrescrito")
-                staging = temp / ("convertido" + extension)
-                if fmt == "original":
-                    os.replace(source, staging)
-                else:
-                    codec = {"mp3": "libmp3lame", "m4a": "aac", "opus": "libopus"}[fmt]
-                    await process(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-vn", "-map", "0:a:0", "-c:a", codec, "-b:a", f"{manifest['quality']}k", str(staging)], log)
-                    if not staging.is_file() or not staging.stat().st_size:
-                        raise RuntimeError("conversão não produziu arquivo válido")
-                os.replace(staging, target)
-            log_message(f"[{song['name']}] concluído: {target}")
-            return {"status": "concluido", "file": target.name, "seconds": round(time.monotonic() - started, 1)}
-        except asyncio.CancelledError:
-            raise
-        except (OSError, RuntimeError) as exc:
-            error = str(exc)
-            log_message(f"[{song['name']}] falha: {error}", file=sys.stderr)
-            if attempt < manifest["config"]["attempts"] and not (destination / (song["name"] + ("." + manifest["format"] if manifest["format"] != "original" else ""))).exists():
-                await asyncio.sleep(manifest["config"]["delay"] * attempt)
-                continue
-            return {"status": "falhou", "error": error, "attempts": attempt}
+    with tempfile.TemporaryDirectory(prefix=f"musics-{key}-") as temporary:
+        temp = Path(temporary)
+        for attempt in range(1, manifest["config"]["attempts"] + 1):
+            try:
+                log_message(f"[{song['name']}] download (tentativa {attempt})")
+                async with download_limit:
+                    await process(["yt-dlp", "--ignore-config", "--no-playlist", "--no-overwrites", "--concurrent-fragments", "1", "-f", "bestaudio/best", "-o", str(temp / "audio.%(ext)s"), song["url"]], log)
+                candidates = [p for p in temp.glob("audio.*") if p.is_file() and not p.name.endswith((".part", ".ytdl")) and p.stat().st_size > 0]
+                if len(candidates) != 1:
+                    raise RuntimeError("download não produziu exatamente um arquivo de áudio")
+                source = candidates[0]
+                async with convert_limit:
+                    log_message(f"[{song['name']}] conversão")
+                    fmt = manifest["format"]
+                    extension = source.suffix if fmt == "original" else "." + fmt
+                    target = destination / (song["name"] + extension)
+                    if target.exists():
+                        raise RuntimeError(f"destino já existe: {target}; não foi sobrescrito")
+                    staging = temp / ("convertido" + extension)
+                    if fmt == "original":
+                        os.replace(source, staging)
+                    else:
+                        codec = {"mp3": "libmp3lame", "m4a": "aac", "opus": "libopus"}[fmt]
+                        await process(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-vn", "-map", "0:a:0", "-c:a", codec, "-b:a", f"{manifest['quality']}k", str(staging)], log)
+                        if not staging.is_file() or not staging.stat().st_size:
+                            raise RuntimeError("conversão não produziu arquivo válido")
+                    os.replace(staging, target)
+                log_message(f"[{song['name']}] concluído: {target}")
+                return {"status": "concluido", "file": target.name, "seconds": round(time.monotonic() - started, 1)}
+            except asyncio.CancelledError:
+                raise
+            except (OSError, RuntimeError) as exc:
+                error = str(exc)
+                log_message(f"[{song['name']}] falha: {error}", file=sys.stderr)
+                if attempt < manifest["config"]["attempts"] and not (destination / (song["name"] + ("." + manifest["format"] if manifest["format"] != "original" else ""))).exists():
+                    await asyncio.sleep(manifest["config"]["delay"] * attempt)
+                    continue
+                return {"status": "falhou", "error": error, "attempts": attempt}
 
 
 # Coordena as tarefas concorrentes, a retomada e a persistência dos resultados.
-async def execute(manifest, destination, resume):
+async def execute(manifest, destination, resume, logs=None):
     destination.mkdir(parents=True, exist_ok=True)
-    state_path = destination / "resultado.json"
+    logs = logs or destination
+    logs.mkdir(parents=True, exist_ok=True)
+    state_path = logs / "resultado.json"
+    sessions = logs / "sessoes"
+    sessions.mkdir(exist_ok=True)
+    session = sessions / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + f"-{os.getpid()}")
+    session.mkdir()
     state = json.loads(state_path.read_text(encoding="utf-8")) if resume and state_path.exists() else {}
     if not isinstance(state, dict):
         raise ValueError("resultado.json inválido")
@@ -214,7 +259,7 @@ async def execute(manifest, destination, resume):
         if resume and isinstance(previous, dict) and previous.get("status") == "concluido" and isinstance(previous.get("file"), str) and (destination / previous["file"]).is_file():
             log_message(f"[{song['name']}] já concluído")
             continue
-        tasks.append(asyncio.create_task(named_task(song, manifest, destination, dl_limit, cv_limit)))
+        tasks.append(asyncio.create_task(named_task(song, manifest, destination, dl_limit, cv_limit, session)))
     try:
         for future in asyncio.as_completed(tasks):
             song, result = await future
@@ -226,20 +271,28 @@ async def execute(manifest, destination, resume):
                 task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        prune_sessions(sessions)
     counts = {status: sum(row.get("status") == status for row in state.values() if isinstance(row, dict)) for status in ("concluido", "falhou")}
     log_message(f"Resultado: {counts['concluido']} concluídos, {counts['falhou']} falhos. Relatório: {state_path}")
     return not counts["falhou"]
 
 
 # Associa o resultado assíncrono à faixa que o produziu.
-async def named_task(song, manifest, destination, dl_limit, cv_limit):
-    return song, await run_song(song, manifest, destination, dl_limit, cv_limit)
+async def named_task(song, manifest, destination, dl_limit, cv_limit, logs):
+    return song, await run_song(song, manifest, destination, dl_limit, cv_limit, logs)
+
+
+# Conserva as três sessões mais recentes e remove apenas diretórios de sessão antigos.
+def prune_sessions(sessions: Path):
+    previous = sorted((path for path in sessions.iterdir() if path.is_dir() and not path.is_symlink()), reverse=True)
+    for old in previous[3:]:
+        shutil.rmtree(old)
 
 
 # Executa a remessa com animação de atividade no terminal interativo.
-async def execute_with_loading(manifest, destination, resume):
+async def execute_with_loading(manifest, destination, resume, logs):
     async with loading_indicator():
-        return await execute(manifest, destination, resume)
+        return await execute(manifest, destination, resume, logs)
 
 
 class PortugueseParser(argparse.ArgumentParser):
@@ -269,7 +322,7 @@ def build_parser():
     actions.add_argument("-d", "--download", type=Path, metavar="ARQUIVO", help="baixa uma remessa")
     actions.add_argument("-r", "--resume", type=Path, metavar="ARQUIVO", help="retoma uma remessa interrompida")
     parser.add_argument("-de", "--destination", type=Path, metavar="PASTA",
-                        default=Path.cwd() / "downloads", help="define a pasta base dos arquivos")
+                        default=None, help="substitui a pasta de músicas padrão")
     parser.add_argument("-y", "--yes", action="store_true", help="confirma a execução sem perguntar")
     return parser
 
@@ -282,7 +335,8 @@ def main(argv=None):
         if args.diagnose:
             return 0 if check_tools() else 1
         manifest = read_manifest(args.validate or args.download or args.resume)
-        destination = args.destination.expanduser().resolve() / manifest["folder"]
+        destination = (args.destination.expanduser() if args.destination else music_directory()) / manifest["folder"]
+        logs = Path.cwd() / "downloads" / manifest["folder"]
         print(f"Remessa: {manifest['folder']} | {len(manifest['songs'])} músicas | {manifest['format']} | destino: {destination}")
         if args.validate:
             return 0
@@ -291,7 +345,7 @@ def main(argv=None):
         if not args.yes and input("Você tem autorização para baixar esses itens e deseja continuar? [s/N] ").strip().casefold() not in {"s", "sim"}:
             print("Cancelado.")
             return 0
-        return 0 if asyncio.run(execute_with_loading(manifest, destination, bool(args.resume))) else 1
+        return 0 if asyncio.run(execute_with_loading(manifest, destination, bool(args.resume), logs)) else 1
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
         print(f"Erro: {exc}", file=sys.stderr)
         return 2

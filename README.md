@@ -65,7 +65,7 @@ musics -d minha-remessa.yaml
 musics -r minha-remessa.yaml
 ```
 
-Os arquivos são salvos em `downloads/<pasta>/` no diretório de onde o comando é executado. Use `-de /caminho/para/musicas` ou `--destination` para escolher a pasta base. Dentro da remessa fica `resultado.json`, com o status de cada item; não edite esse arquivo manualmente. A opção `-y`/`--yes` dispensa a pergunta interativa, mas somente use para arquivos cujo conteúdo você conhece.
+Os áudios são salvos na pasta de músicas do usuário (`Músicas/<pasta>` no Windows em português; no Linux, segue `XDG_MUSIC_DIR`; no macOS, `~/Music`). Use `-de /caminho/para/musicas` ou `--destination` para escolher outra pasta base. Os logs ficam em `downloads/<pasta>/sessoes/` no diretório de onde o comando é executado. O programa mantém somente as três sessões mais recentes de logs; as antigas são removidas automaticamente após a execução. O estado `downloads/<pasta>/resultado.json` fica separado dos logs e é preservado para permitir `-r`. Não edite esse arquivo manualmente. A opção `-y`/`--yes` dispensa a pergunta interativa, mas somente use para arquivos cujo conteúdo você conhece.
 
 | Operação | Flag curta | Flag longa |
 | --- | --- | --- |
@@ -83,4 +83,4 @@ Durante o processamento, um indicador giratório mostra que há tarefas em andam
 
 Até cinco itens podem ser baixados ao mesmo tempo e até dois convertidos. Valores menores podem ser definidos no YAML. `original` preserva o contêiner de áudio obtido, como `.webm` ou `.m4a`. Nos demais formatos, a conversão pode perder qualidade e um bitrate maior não recupera detalhes ausentes da fonte.
 
-Ao interromper com Ctrl+C, os downloads incompletos ficam em uma área de trabalho dentro da remessa; `musics -r ARQUIVO` reprocessa itens ainda não concluídos. O resultado final de cada item só é publicado após terminar a conversão. Atualizações da plataforma, indisponibilidade de vídeos e restrições de acesso podem causar falhas individuais.
+Ao interromper com Ctrl+C, arquivos temporários são descartados; `musics -r ARQUIVO` baixa novamente itens ainda não concluídos. O resultado final de cada item só é publicado após terminar a conversão. Atualizações da plataforma, indisponibilidade de vídeos e restrições de acesso podem causar falhas individuais.

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from remessa_musicas.cli import build_parser, execute, loading_indicator, main, read_manifest
+from remessa_musicas.cli import build_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, run_song
 
 
 class CommandTests(unittest.TestCase):
@@ -33,6 +33,28 @@ class CommandTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
+    def test_music_directory_linux_xdg(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            (home / ".config").mkdir()
+            (home / ".config" / "user-dirs.dirs").write_text('XDG_MUSIC_DIR="$HOME/Músicas"\n')
+            with patch("pathlib.Path.home", return_value=home), patch("sys.platform", "linux"):
+                self.assertEqual(music_directory(), home / "Músicas")
+
+    def test_prune_keeps_three_latest_sessions_and_state(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "resultado.json").write_text("{}")
+            sessions = root / "sessoes"
+            sessions.mkdir()
+            for number in range(5):
+                folder = sessions / str(number)
+                folder.mkdir()
+                (folder / "execucao.log").write_text("log")
+            prune_sessions(sessions)
+            self.assertEqual(sorted(path.name for path in sessions.iterdir()), ["2", "3", "4"])
+            self.assertTrue((root / "resultado.json").exists())
+
     def test_rejects_path_traversal_and_duplicate_names(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "remessa.yaml"
@@ -45,6 +67,25 @@ class ManifestTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_audio_and_logs_use_separate_directories(self):
+        with tempfile.TemporaryDirectory() as temp:
+            audio = Path(temp) / "Músicas" / "Lote"
+            logs = Path(temp) / "projeto" / "downloads" / "Lote"
+            audio.mkdir(parents=True)
+            song = {"name": "Exemplo", "url": "https://youtu.be/example", "key": "faixa"}
+            manifest = {"format": "original", "config": {"attempts": 1, "delay": 0}}
+
+            async def fake_process(command, log):
+                Path(command[command.index("-o") + 1].replace("%(ext)s", "webm")).write_bytes(b"audio")
+                log.write_text("processado")
+
+            with patch("remessa_musicas.cli.process", fake_process):
+                result = await run_song(song, manifest, audio, asyncio.Semaphore(1), asyncio.Semaphore(1), logs)
+            self.assertEqual(result["status"], "concluido")
+            self.assertTrue((audio / "Exemplo.webm").exists())
+            self.assertTrue((logs / "faixa" / "execucao.log").exists())
+            self.assertFalse(list(logs.rglob("*.webm")))
+
     # Confere a animação, sua limpeza e a ausência de códigos de terminal em logs.
     async def test_loading_indicator_cleanup(self):
         terminal = io.StringIO()
@@ -76,7 +117,7 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             manifest = {"songs": songs, "config": {"downloads": 5, "conversions": 2}}
             called = []
 
-            async def fake_run(song, config, destination, dl_limit, cv_limit):
+            async def fake_run(song, config, destination, dl_limit, cv_limit, logs):
                 called.append(song["name"])
                 await asyncio.sleep(0.01 if song["name"] == "um" else 0)
                 (destination / (song["name"] + ".mp3")).write_bytes(b"audio")
@@ -87,6 +128,7 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(await execute(manifest, dest, True))
             self.assertEqual(called, ["um", "dois"])
             self.assertTrue((dest / "resultado.json").is_file())
+            self.assertEqual(len(list((dest / "sessoes").iterdir())), 2)
 
 
 if __name__ == "__main__":
