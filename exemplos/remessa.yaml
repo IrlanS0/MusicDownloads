@@ -1,0 +1,11 @@
+pasta: "Minha remessa"
+formato: "mp3" # mp3, m4a, opus ou original
+qualidade: 192 # bitrate do arquivo final; não aumenta a qualidade da fonte
+execucao:
+  downloads_simultaneos: 5
+  conversoes_simultaneas: 2
+  tentativas: 3
+  intervalo_tentativas: 3
+musicas:
+  - nome: "Nome da faixa"
+    url: "https://www.youtube.com/watch?v=SUBSTITUA_PELO_ID"
