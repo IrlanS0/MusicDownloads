@@ -16,6 +16,8 @@ O programa deve ser um orquestrador robusto de ferramentas locais. Nao automatiz
 - Interface de terminal: preferencialmente Rich.
 - CLI: argparse ou Typer, escolhendo uma unica opcao durante a implementacao.
 - Comandos planejados:
+  - `music add` / `musics add`: coleta album, nome e URL de uma faixa e inicia o download.
+  - `music add -dir <lista.csv|lista.txt>`: importa varias faixas agrupadas por album, com CSV `album,nome,url` ou TXT `album | nome | URL`; `-dir` sem argumento pergunta o caminho.
   - `musics -dg` / `musics --diagnose`
   - `musics -v <remessa.yaml>` / `musics --validate <remessa.yaml>`
   - `musics -d <remessa.yaml>` / `musics --download <remessa.yaml>`

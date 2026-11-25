@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import csv
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -80,6 +81,11 @@ def integer(value, name, low, high):
 # Lê a remessa YAML e valida seus itens e configurações.
 def read_manifest(path: Path) -> dict:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return validate_manifest(data)
+
+
+# Valida a estrutura de uma remessa, independentemente da origem dos dados.
+def validate_manifest(data: dict) -> dict:
     if not isinstance(data, dict):
         raise ValueError("a remessa deve ser um objeto YAML")
     if "pasta" in data or "musicas" in data:
@@ -131,6 +137,44 @@ def read_manifest(path: Path) -> dict:
             key = hashlib.sha256((album + "\0" + name + "\0" + url).encode()).hexdigest()[:16]
             songs.append({"album": album, "name": name, "url": url, "key": key})
     return {"albums": album_names, "format": fmt, "quality": quality, "config": limits, "songs": songs}
+
+
+# Monta uma remessa a partir de linhas inseridas no terminal ou importadas.
+def manifest_from_rows(rows):
+    albums = {}
+    for album, name, url in rows:
+        label = album.strip()
+        key = label.casefold()
+        albums.setdefault(key, {"nome": label, "musicas": []})["musicas"].append({"nome": name.strip(), "url": url.strip()})
+    return validate_manifest({"albuns": list(albums.values())})
+
+
+# Importa faixas de um CSV com cabeçalho ou de um TXT separado por barras verticais.
+def read_song_list(path: Path):
+    rows = []
+    with path.open("r", encoding="utf-8-sig", newline="") as source:
+        if path.suffix.casefold() == ".csv":
+            reader = csv.DictReader(source)
+            if reader.fieldnames is None or [field.strip().casefold() for field in reader.fieldnames] != ["album", "nome", "url"]:
+                raise ValueError("CSV: o cabeçalho deve ser album,nome,url, nessa ordem")
+            for line, row in enumerate(reader, 2):
+                if None in row or any(value is None for value in row.values()):
+                    raise ValueError(f"CSV, linha {line}: esperado album,nome,url")
+                rows.append(tuple(row[field].strip() for field in reader.fieldnames))
+        elif path.suffix.casefold() == ".txt":
+            for line, content in enumerate(source, 1):
+                content = content.strip()
+                if not content or content.startswith("#"):
+                    continue
+                fields = [field.strip() for field in content.split("|")]
+                if len(fields) != 3:
+                    raise ValueError(f"TXT, linha {line}: esperado álbum | nome | URL")
+                rows.append(tuple(fields))
+        else:
+            raise ValueError("a lista de músicas deve ter extensão .csv ou .txt")
+    if not rows:
+        raise ValueError("a lista de músicas está vazia")
+    return manifest_from_rows(rows)
 
 
 # Verifica as ferramentas externas necessárias ao processamento.
@@ -288,7 +332,8 @@ async def execute(manifest, destination, resume, logs=None):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         prune_sessions(sessions)
-    counts = {status: sum(row.get("status") == status for row in state.values() if isinstance(row, dict)) for status in ("concluido", "falhou")}
+    current = [state.get(song["key"]) for song in manifest["songs"]]
+    counts = {status: sum(isinstance(row, dict) and row.get("status") == status for row in current) for status in ("concluido", "falhou")}
     log_message(f"Resultado: {counts['concluido']} concluídos, {counts['falhou']} falhos. Relatório: {state_path}")
     return not counts["falhou"]
 
@@ -315,7 +360,7 @@ class PortugueseParser(argparse.ArgumentParser):
     # Apresenta erros de argumentos em português, preservando os nomes das flags.
     def error(self, message):
         self.print_usage(sys.stderr)
-        self.exit(2, "Erro: argumentos inválidos ou conflitantes. Consulte 'musics -h'.\n")
+        self.exit(2, f"Erro: argumentos inválidos ou conflitantes. Consulte '{self.prog} -h'.\n")
 
     # Traduz o rótulo de uso produzido pelo argparse.
     def format_usage(self):
@@ -343,8 +388,61 @@ def build_parser():
     return parser
 
 
+# Define as opções para cadastrar uma faixa ou importar uma lista de faixas.
+def build_add_parser():
+    parser = PortugueseParser(prog="music add", add_help=False, allow_abbrev=False,
+                              description="Adiciona uma música ou importa uma lista de músicas.")
+    parser._optionals.title = "Opções"
+    parser.add_argument("-h", "--help", action="help", help="mostra esta ajuda e sai")
+    parser.add_argument("-dir", "--directory", nargs="?", const="", metavar="ARQUIVO",
+                        help="importa várias músicas de um arquivo CSV ou TXT; sem arquivo, pergunta o caminho")
+    parser.add_argument("-de", "--destination", type=Path, metavar="PASTA",
+                        help="substitui a pasta de músicas padrão")
+    parser.add_argument("-y", "--yes", action="store_true", help="confirma a importação sem perguntar")
+    return parser
+
+
+# Escolhe um diretório de logs estável para cada arquivo de entrada.
+def logs_for_file(path: Path):
+    identifier = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:8]
+    return Path.cwd() / "downloads" / f"{safe_name(path.stem)}-{identifier}"
+
+
+# Solicita os dados e inicia o download de uma ou várias faixas.
+def add_songs(argv):
+    args = build_add_parser().parse_args(argv)
+    if args.directory is None:
+        album = input("Nome do álbum: ").strip()
+        name = input("Nome da música: ").strip()
+        url = input("URL da música: ").strip()
+        manifest = manifest_from_rows([(album, name, url)])
+        logs = Path.cwd() / "downloads" / f"add-{manifest['songs'][0]['key']}"
+    else:
+        path = Path(args.directory or input("Caminho do arquivo CSV ou TXT: ").strip()).expanduser()
+        manifest = read_song_list(path)
+        logs = logs_for_file(path)
+    destination = args.destination.expanduser() if args.destination else music_directory()
+    print(f"Remessa: {len(manifest['albums'])} álbum(ns), {len(manifest['songs'])} música(s) | destino: {destination}")
+    if not check_tools():
+        return 1
+    if args.directory is not None and not args.yes and input("Você tem autorização para baixar esses itens e deseja continuar? [s/N] ").strip().casefold() not in {"s", "sim"}:
+        print("Cancelado.")
+        return 0
+    return 0 if asyncio.run(execute_with_loading(manifest, destination, True, logs)) else 1
+
+
 # Interpreta os argumentos e encaminha a operação solicitada pelo usuário.
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "add":
+        try:
+            return add_songs(argv[1:])
+        except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError, EOFError) as exc:
+            print(f"Erro: {exc}", file=sys.stderr)
+            return 2
+        except KeyboardInterrupt:
+            print("Interrompido; execute novamente para continuar.", file=sys.stderr)
+            return 130
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -353,8 +451,7 @@ def main(argv=None):
         manifest_path = args.validate or args.download or args.resume
         manifest = read_manifest(manifest_path)
         destination = args.destination.expanduser() if args.destination else music_directory()
-        manifest_id = hashlib.sha256(str(manifest_path.resolve()).encode()).hexdigest()[:8]
-        logs = Path.cwd() / "downloads" / f"{safe_name(manifest_path.stem)}-{manifest_id}"
+        logs = logs_for_file(manifest_path)
         print(f"Remessa: {len(manifest['albums'])} álbuns, {len(manifest['songs'])} músicas | {manifest['format']} | destino: {destination}")
         if args.validate:
             return 0

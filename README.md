@@ -83,6 +83,35 @@ musics -d minha-remessa.yaml
 musics -r minha-remessa.yaml
 ```
 
+### Adição interativa e importação de listas
+
+Depois de instalar ou atualizar o projeto com `pipx install --force --include-deps .`, execute `music add`. O programa pede o nome do álbum, o nome da faixa e a URL; valida os dados e inicia o download imediatamente em formato MP3 (192 kb/s). `musics add` também funciona.
+
+Para várias faixas, crie um arquivo CSV UTF-8 com o cabeçalho `album,nome,url`:
+
+```csv
+album,nome,url
+Álbum 1,Primeira faixa,https://www.youtube.com/watch?v=ID_1
+Álbum 1,Segunda faixa,https://www.youtube.com/watch?v=ID_2
+Álbum 2,Outra faixa,https://www.youtube.com/watch?v=ID_3
+```
+
+Ou um TXT UTF-8, com uma faixa por linha no formato `álbum | nome | URL` (linhas vazias ou iniciadas por `#` são ignoradas):
+
+```text
+Álbum 1 | Primeira faixa | https://www.youtube.com/watch?v=ID_1
+Álbum 2 | Outra faixa | https://www.youtube.com/watch?v=ID_3
+```
+
+```bash
+music add -dir lista.csv
+music add -dir lista.txt
+music add -dir               # pergunta o caminho do arquivo
+music add -dir lista.csv -y  # dispensa a confirmação da importação
+```
+
+Os nomes de álbum podem se repetir entre linhas; as faixas serão agrupadas na mesma pasta. Nomes de música repetidos no mesmo álbum são rejeitados antes do download. Também é possível usar `-de PASTA` para escolher outro destino. Uma nova execução com a mesma lista retoma faixas concluídas pelo mesmo comando; os logs e o estado ficam em `downloads/`.
+
 Os áudios são salvos na pasta de músicas do usuário (`Músicas/<álbum>` no Windows em português; no Linux, segue `XDG_MUSIC_DIR`; no macOS, `~/Music`). Use `-de /caminho/para/musicas` ou `--destination` para escolher outra pasta base. Os logs ficam em `downloads/<nome-do-yaml>-<id>/sessoes/` no diretório de onde o comando é executado. O identificador evita misturar remessas com nomes de arquivo iguais em locais diferentes. O programa mantém somente as três sessões mais recentes de logs; as antigas são removidas automaticamente após a execução. O estado `downloads/<nome-do-yaml>-<id>/resultado.json` fica separado dos logs e é preservado para permitir `-r`. Não edite esse arquivo manualmente. A opção `-y`/`--yes` dispensa a pergunta interativa, mas somente use para arquivos cujo conteúdo você conhece.
 
 | Operação | Flag curta | Flag longa |

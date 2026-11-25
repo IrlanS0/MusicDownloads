@@ -5,10 +5,37 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from remessa_musicas.cli import build_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, run_song
+from remessa_musicas.cli import build_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, read_song_list, run_song
 
 
 class CommandTests(unittest.TestCase):
+    # Confere o cadastro interativo e o download imediato sem invocar ferramentas externas.
+    def test_add_single(self):
+        with tempfile.TemporaryDirectory() as temp:
+            values = iter(["Meu álbum", "Minha faixa", "https://youtu.be/example"])
+            async def fake_execute(*args):
+                return True
+
+            with patch("builtins.input", side_effect=lambda _: next(values)), patch("remessa_musicas.cli.check_tools", return_value=True), patch("remessa_musicas.cli.execute_with_loading", side_effect=fake_execute) as run:
+                self.assertEqual(main(["add", "-de", temp]), 0)
+            manifest, destination, resume, logs = run.call_args.args
+            self.assertEqual(manifest["songs"][0]["album"], "Meu álbum")
+            self.assertEqual(destination, Path(temp))
+            self.assertTrue(resume)
+            self.assertIn("downloads/add-", str(logs))
+
+    # Confere o carregamento de lotes de arquivos e a confirmação antes de baixar.
+    def test_add_from_csv(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "lista.csv"
+            path.write_text("album,nome,url\nÁlbum 1,Faixa 1,https://youtu.be/one\nÁlbum 2,Faixa 2,https://youtu.be/two\n", encoding="utf-8")
+            async def fake_execute(*args):
+                return True
+
+            with patch("remessa_musicas.cli.check_tools", return_value=True), patch("remessa_musicas.cli.execute_with_loading", side_effect=fake_execute) as run, patch("builtins.input", return_value="s"):
+                self.assertEqual(main(["add", "-dir", str(path)]), 0)
+            self.assertEqual(run.call_args.args[0]["albums"], ["Álbum 1", "Álbum 2"])
+
     # Verifica aliases e conflitos nas flags com prefixos compartilhados.
     def test_flags(self):
         parser = build_parser()
@@ -33,6 +60,21 @@ class CommandTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
+    # Agrupa linhas repetidas de um álbum e rejeita duplicatas e listas malformadas.
+    def test_import_formats(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "lista.txt"
+            path.write_text("# Comentário\nÁlbum | Faixa 1 | https://youtu.be/one\nÁlbum | Faixa 2 | https://youtu.be/two\n", encoding="utf-8")
+            manifest = read_song_list(path)
+            self.assertEqual(manifest["albums"], ["Álbum"])
+            self.assertEqual(len(manifest["songs"]), 2)
+            path.write_text("Álbum | Faixa | https://youtu.be/one\nÁlbum | Faixa | https://youtu.be/two\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "música repetida"):
+                read_song_list(path)
+            path.write_text("Álbum | linha incompleta\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "linha 1"):
+                read_song_list(path)
+
     def test_music_directory_linux_xdg(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
