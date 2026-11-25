@@ -60,7 +60,7 @@ class CommandTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
-    # Agrupa linhas repetidas de um álbum e rejeita duplicatas e listas malformadas.
+    # Agrupa linhas de um álbum, ignora duplicatas e rejeita listas malformadas.
     def test_import_formats(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "lista.txt"
@@ -69,8 +69,11 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(manifest["albums"], ["Álbum"])
             self.assertEqual(len(manifest["songs"]), 2)
             path.write_text("Álbum | Faixa | https://youtu.be/one\nÁlbum | Faixa | https://youtu.be/two\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "música repetida"):
-                read_song_list(path)
+            with patch("sys.stderr", new_callable=io.StringIO) as warnings:
+                manifest = read_song_list(path)
+            self.assertEqual(len(manifest["songs"]), 1)
+            self.assertEqual(manifest["songs"][0]["url"], "https://youtu.be/one")
+            self.assertIn("música repetida", warnings.getvalue())
             path.write_text("Álbum | linha incompleta\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "linha 1"):
                 read_song_list(path)
@@ -104,8 +107,11 @@ class ManifestTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 read_manifest(path)
             path.write_text('albuns:\n  - nome: Dentro\n    musicas:\n      - nome: Teste\n        url: https://youtu.be/one\n      - nome: teste\n        url: https://youtu.be/two\n')
-            with self.assertRaises(ValueError):
-                read_manifest(path)
+            with patch("sys.stderr", new_callable=io.StringIO) as warnings:
+                manifest = read_manifest(path)
+            self.assertEqual(len(manifest["songs"]), 1)
+            self.assertEqual(manifest["songs"][0]["url"], "https://youtu.be/one")
+            self.assertIn("música repetida", warnings.getvalue())
             path.write_text('pasta: Antigo\nmusicas:\n  - nome: Teste\n    url: https://youtu.be/one\n')
             with self.assertRaisesRegex(ValueError, "formato antigo"):
                 read_manifest(path)

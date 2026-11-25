@@ -26,6 +26,7 @@ O programa deve ser um orquestrador robusto de ferramentas locais. Nao automatiz
 - Comandos em ingles; mensagens e ajuda em portugues. YAML permanece em portugues.
 - Mostrar indicador giratorio durante o processamento em terminal interativo; limpar ao terminar ou cancelar e desativar em saida redirecionada.
 - Salvar audio em pasta de Musicas padrao do SO, mais subpasta por album. Uma remessa YAML pode definir varios albuns em `albuns: [{nome, musicas: [{nome, url}]}]`. Logs e estado ficam no `downloads/<identificador-da-remessa>` do diretorio de trabalho; conservar tres sessoes recentes de logs, preservando `resultado.json` para retomada.
+- Quando uma faixa tiver o mesmo nome de outra no mesmo album, avisar e manter apenas a primeira ocorrencia; albuns diferentes podem conter nomes de faixa iguais.
 - Adicionar comentario breve antes de cada funcao explicando sua finalidade.
 
 ## Formato preliminar da remessa

@@ -125,14 +125,15 @@ def validate_manifest(data: dict) -> dict:
             if not isinstance(row, dict):
                 raise ValueError(f"álbum {album}, item {idx}: esperado nome e url")
             name = safe_name(row.get("nome"))
+            if name.casefold() in seen_names:
+                log_message(f"Aviso: álbum {album}, item {idx}: música repetida '{name}'; ignorada (primeira ocorrência mantida).", file=sys.stderr)
+                continue
             url = row.get("url")
             if not isinstance(url, str):
                 raise ValueError(f"álbum {album}, item {idx}: URL inválida")
             parsed = urlparse(url)
             if parsed.scheme != "https" or parsed.hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"} or parsed.username or parsed.password:
                 raise ValueError(f"álbum {album}, item {idx}: somente URLs HTTPS do YouTube são aceitas")
-            if name.casefold() in seen_names:
-                raise ValueError(f"álbum {album}, item {idx}: música repetida: {name}")
             seen_names.add(name.casefold())
             key = hashlib.sha256((album + "\0" + name + "\0" + url).encode()).hexdigest()[:16]
             songs.append({"album": album, "name": name, "url": url, "key": key})

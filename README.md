@@ -75,7 +75,7 @@ albuns:
         url: "https://www.youtube.com/watch?v=ID_3"
 ```
 
-Cada álbum vira uma pasta na biblioteca de músicas. Nomes de faixas podem se repetir em álbuns diferentes, mas não dentro do mesmo álbum. O formato anterior (`pasta` e `musicas` na raiz) deve ser convertido para `albuns`.
+Cada álbum vira uma pasta na biblioteca de músicas. Nomes de faixas podem se repetir em álbuns diferentes; no mesmo álbum, apenas a primeira ocorrência é considerada. O formato anterior (`pasta` e `musicas` na raiz) deve ser convertido para `albuns`.
 
 ```bash
 musics -v minha-remessa.yaml
@@ -110,7 +110,7 @@ music add -dir               # pergunta o caminho do arquivo
 music add -dir lista.csv -y  # dispensa a confirmação da importação
 ```
 
-Os nomes de álbum podem se repetir entre linhas; as faixas serão agrupadas na mesma pasta. Nomes de música repetidos no mesmo álbum são rejeitados antes do download. Também é possível usar `-de PASTA` para escolher outro destino. Uma nova execução com a mesma lista retoma faixas concluídas pelo mesmo comando; os logs e o estado ficam em `downloads/`.
+Os nomes de álbum podem se repetir entre linhas; as faixas serão agrupadas na mesma pasta. Se o nome de uma música se repetir no mesmo álbum, o programa avisa e ignora as ocorrências posteriores, preservando a primeira. Também é possível usar `-de PASTA` para escolher outro destino. Uma nova execução com a mesma lista retoma faixas concluídas pelo mesmo comando; os logs e o estado ficam em `downloads/`.
 
 Os áudios são salvos na pasta de músicas do usuário (`Músicas/<álbum>` no Windows em português; no Linux, segue `XDG_MUSIC_DIR`; no macOS, `~/Music`). Use `-de /caminho/para/musicas` ou `--destination` para escolher outra pasta base. Os logs ficam em `downloads/<nome-do-yaml>-<id>/sessoes/` no diretório de onde o comando é executado. O identificador evita misturar remessas com nomes de arquivo iguais em locais diferentes. O programa mantém somente as três sessões mais recentes de logs; as antigas são removidas automaticamente após a execução. O estado `downloads/<nome-do-yaml>-<id>/resultado.json` fica separado dos logs e é preservado para permitir `-r`. Não edite esse arquivo manualmente. A opção `-y`/`--yes` dispensa a pergunta interativa, mas somente use para arquivos cujo conteúdo você conhece.
 
