@@ -2,7 +2,9 @@
 
 import argparse
 import asyncio
+from contextlib import asynccontextmanager
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -19,6 +21,7 @@ import yaml
 FORMATS = {"mp3", "m4a", "opus", "original"}
 
 
+# Valida e sanitiza nomes de arquivos e pastas.
 def safe_name(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("nome/pasta deve ser texto não vazio")
@@ -30,12 +33,14 @@ def safe_name(value: str) -> str:
     return cleaned[:160]
 
 
+# Confere se um valor inteiro está dentro dos limites permitidos.
 def integer(value, name, low, high):
     if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
         raise ValueError(f"{name} deve ser inteiro entre {low} e {high}")
     return value
 
 
+# Lê a remessa YAML e valida seus itens e configurações.
 def read_manifest(path: Path) -> dict:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -77,6 +82,7 @@ def read_manifest(path: Path) -> dict:
     return {"folder": folder, "format": fmt, "quality": quality, "config": limits, "songs": songs}
 
 
+# Verifica as ferramentas externas necessárias ao processamento.
 def check_tools():
     missing = []
     for name in ("yt-dlp", "ffmpeg", "ffprobe"):
@@ -92,12 +98,14 @@ def check_tools():
     return not missing
 
 
+# Grava o relatório substituindo o arquivo anterior atomicamente.
 def write_state(path: Path, data: dict):
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
 
+# Executa uma ferramenta externa e encerra o processo se a tarefa for cancelada.
 async def process(command: list[str], log: Path):
     with log.open("ab") as output:
         proc = await asyncio.create_subprocess_exec(*command, stdout=output, stderr=asyncio.subprocess.STDOUT)
@@ -115,6 +123,37 @@ async def process(command: list[str], log: Path):
         raise RuntimeError(f"{Path(command[0]).name} terminou com código {code}; consulte {log}")
 
 
+# Limpa a linha da animação antes de escrever uma mensagem em português.
+def log_message(message, *, file=None, flush=True):
+    if sys.stderr.isatty():
+        sys.stderr.write("\r\033[2K")
+        sys.stderr.flush()
+    print(message, file=file, flush=flush)
+
+
+# Atualiza um indicador visual enquanto as tarefas de áudio estão em execução.
+async def animate_loading():
+    for frame in itertools.cycle("|/-\\"):
+        sys.stderr.write(f"\r{frame} Processando remessa...")
+        sys.stderr.flush()
+        await asyncio.sleep(0.12)
+
+
+# Mantém a animação ativa no terminal e garante sua limpeza ao terminar.
+@asynccontextmanager
+async def loading_indicator():
+    animation = asyncio.create_task(animate_loading()) if sys.stderr.isatty() else None
+    try:
+        yield
+    finally:
+        if animation is not None:
+            animation.cancel()
+            await asyncio.gather(animation, return_exceptions=True)
+            sys.stderr.write("\r\033[2K")
+            sys.stderr.flush()
+
+
+# Baixa e converte uma faixa, respeitando limites e novas tentativas.
 async def run_song(song, manifest, destination, download_limit, convert_limit):
     key = song["key"]
     temp = destination / ".trabalho" / key
@@ -123,7 +162,7 @@ async def run_song(song, manifest, destination, download_limit, convert_limit):
     started = time.monotonic()
     for attempt in range(1, manifest["config"]["attempts"] + 1):
         try:
-            print(f"[{song['name']}] download (tentativa {attempt})", flush=True)
+            log_message(f"[{song['name']}] download (tentativa {attempt})")
             async with download_limit:
                 # O template é fixo; cada item tem uma área isolada.
                 await process(["yt-dlp", "--ignore-config", "--no-playlist", "--no-overwrites", "--concurrent-fragments", "1", "-f", "bestaudio/best", "-o", str(temp / "audio.%(ext)s"), song["url"]], log)
@@ -132,7 +171,7 @@ async def run_song(song, manifest, destination, download_limit, convert_limit):
                 raise RuntimeError("download não produziu exatamente um arquivo de áudio")
             source = candidates[0]
             async with convert_limit:
-                print(f"[{song['name']}] conversão", flush=True)
+                log_message(f"[{song['name']}] conversão")
                 fmt = manifest["format"]
                 extension = source.suffix if fmt == "original" else "." + fmt
                 target = destination / (song["name"] + extension)
@@ -147,19 +186,20 @@ async def run_song(song, manifest, destination, download_limit, convert_limit):
                     if not staging.is_file() or not staging.stat().st_size:
                         raise RuntimeError("conversão não produziu arquivo válido")
                 os.replace(staging, target)
-            print(f"[{song['name']}] concluído: {target}", flush=True)
+            log_message(f"[{song['name']}] concluído: {target}")
             return {"status": "concluido", "file": target.name, "seconds": round(time.monotonic() - started, 1)}
         except asyncio.CancelledError:
             raise
         except (OSError, RuntimeError) as exc:
             error = str(exc)
-            print(f"[{song['name']}] falha: {error}", file=sys.stderr, flush=True)
+            log_message(f"[{song['name']}] falha: {error}", file=sys.stderr)
             if attempt < manifest["config"]["attempts"] and not (destination / (song["name"] + ("." + manifest["format"] if manifest["format"] != "original" else ""))).exists():
                 await asyncio.sleep(manifest["config"]["delay"] * attempt)
                 continue
             return {"status": "falhou", "error": error, "attempts": attempt}
 
 
+# Coordena as tarefas concorrentes, a retomada e a persistência dos resultados.
 async def execute(manifest, destination, resume):
     destination.mkdir(parents=True, exist_ok=True)
     state_path = destination / "resultado.json"
@@ -172,7 +212,7 @@ async def execute(manifest, destination, resume):
     for song in manifest["songs"]:
         previous = state.get(song["key"])
         if resume and isinstance(previous, dict) and previous.get("status") == "concluido" and isinstance(previous.get("file"), str) and (destination / previous["file"]).is_file():
-            print(f"[{song['name']}] já concluído")
+            log_message(f"[{song['name']}] já concluído")
             continue
         tasks.append(asyncio.create_task(named_task(song, manifest, destination, dl_limit, cv_limit)))
     try:
@@ -187,44 +227,76 @@ async def execute(manifest, destination, resume):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
     counts = {status: sum(row.get("status") == status for row in state.values() if isinstance(row, dict)) for status in ("concluido", "falhou")}
-    print(f"Resultado: {counts['concluido']} concluídos, {counts['falhou']} falhos. Relatório: {state_path}")
+    log_message(f"Resultado: {counts['concluido']} concluídos, {counts['falhou']} falhos. Relatório: {state_path}")
     return not counts["falhou"]
 
 
+# Associa o resultado assíncrono à faixa que o produziu.
 async def named_task(song, manifest, destination, dl_limit, cv_limit):
     return song, await run_song(song, manifest, destination, dl_limit, cv_limit)
 
 
+# Executa a remessa com animação de atividade no terminal interativo.
+async def execute_with_loading(manifest, destination, resume):
+    async with loading_indicator():
+        return await execute(manifest, destination, resume)
+
+
+class PortugueseParser(argparse.ArgumentParser):
+    # Apresenta erros de argumentos em português, preservando os nomes das flags.
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(2, "Erro: argumentos inválidos ou conflitantes. Consulte 'musics -h'.\n")
+
+    # Traduz o rótulo de uso produzido pelo argparse.
+    def format_usage(self):
+        return super().format_usage().replace("usage:", "Uso:", 1)
+
+    # Traduz o cabeçalho da ajuda sem alterar os comandos.
+    def format_help(self):
+        return super().format_help().replace("usage:", "Uso:", 1)
+
+
+# Define as flags em inglês e suas descrições em português.
+def build_parser():
+    parser = PortugueseParser(prog="musics", add_help=False, allow_abbrev=False,
+                              description="Baixa e organiza remessas de áudio.")
+    parser._optionals.title = "Opções"
+    parser.add_argument("-h", "--help", action="help", help="mostra esta ajuda e sai")
+    actions = parser.add_mutually_exclusive_group(required=True)
+    actions.add_argument("-dg", "--diagnose", action="store_true", help="verifica as dependências")
+    actions.add_argument("-v", "--validate", type=Path, metavar="ARQUIVO", help="valida uma remessa YAML")
+    actions.add_argument("-d", "--download", type=Path, metavar="ARQUIVO", help="baixa uma remessa")
+    actions.add_argument("-r", "--resume", type=Path, metavar="ARQUIVO", help="retoma uma remessa interrompida")
+    parser.add_argument("-de", "--destination", type=Path, metavar="PASTA",
+                        default=Path.cwd() / "downloads", help="define a pasta base dos arquivos")
+    parser.add_argument("-y", "--yes", action="store_true", help="confirma a execução sem perguntar")
+    return parser
+
+
+# Interpreta os argumentos e encaminha a operação solicitada pelo usuário.
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="musicas")
-    sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("diagnostico")
-    for action in ("validar", "baixar", "retomar"):
-        item = sub.add_parser(action)
-        item.add_argument("remessa", type=Path)
-        item.add_argument("--destino", type=Path, default=Path.cwd() / "downloads")
-        if action != "validar":
-            item.add_argument("--sim", action="store_true")
+    parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        if args.command == "diagnostico":
+        if args.diagnose:
             return 0 if check_tools() else 1
-        manifest = read_manifest(args.remessa)
-        destination = args.destino.expanduser().resolve() / manifest["folder"]
+        manifest = read_manifest(args.validate or args.download or args.resume)
+        destination = args.destination.expanduser().resolve() / manifest["folder"]
         print(f"Remessa: {manifest['folder']} | {len(manifest['songs'])} músicas | {manifest['format']} | destino: {destination}")
-        if args.command == "validar":
+        if args.validate:
             return 0
         if not check_tools():
             return 1
-        if not args.sim and input("Você tem autorização para baixar esses itens e deseja continuar? [s/N] ").strip().casefold() not in {"s", "sim"}:
+        if not args.yes and input("Você tem autorização para baixar esses itens e deseja continuar? [s/N] ").strip().casefold() not in {"s", "sim"}:
             print("Cancelado.")
             return 0
-        return 0 if asyncio.run(execute(manifest, destination, args.command == "retomar")) else 1
+        return 0 if asyncio.run(execute_with_loading(manifest, destination, bool(args.resume))) else 1
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
         print(f"Erro: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        print("Interrompido; use 'musicas retomar' para continuar.", file=sys.stderr)
+        print("Interrompido; use 'musics -r ARQUIVO' para continuar.", file=sys.stderr)
         return 130
 
 

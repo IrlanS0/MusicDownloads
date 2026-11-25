@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["PyYAML>=6,<7", "yt-dlp[default]>=2026.1"]
 
 [project.scripts]
-musicas = "remessa_musicas.cli:main"
+musics = "remessa_musicas.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

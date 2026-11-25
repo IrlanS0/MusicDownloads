@@ -16,10 +16,14 @@ O programa deve ser um orquestrador robusto de ferramentas locais. Nao automatiz
 - Interface de terminal: preferencialmente Rich.
 - CLI: argparse ou Typer, escolhendo uma unica opcao durante a implementacao.
 - Comandos planejados:
-  - `musicas diagnostico`
-  - `musicas validar <remessa.yaml>`
-  - `musicas baixar <remessa.yaml>`
-  - `musicas retomar <remessa.yaml>`
+  - `musics -dg` / `musics --diagnose`
+  - `musics -v <remessa.yaml>` / `musics --validate <remessa.yaml>`
+  - `musics -d <remessa.yaml>` / `musics --download <remessa.yaml>`
+  - `musics -r <remessa.yaml>` / `musics --resume <remessa.yaml>`
+- Flags auxiliares: `-de`/`--destination`, `-y`/`--yes`, `-h`/`--help`.
+- Comandos em ingles; mensagens e ajuda em portugues. YAML permanece em portugues.
+- Mostrar indicador giratorio durante o processamento em terminal interativo; limpar ao terminar ou cancelar e desativar em saida redirecionada.
+- Adicionar comentario breve antes de cada funcao explicando sua finalidade.
 
 ## Formato preliminar da remessa
 

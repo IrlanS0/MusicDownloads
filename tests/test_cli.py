@@ -1,10 +1,35 @@
 import asyncio
+import io
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from remessa_musicas.cli import execute, read_manifest
+from remessa_musicas.cli import build_parser, execute, loading_indicator, main, read_manifest
+
+
+class CommandTests(unittest.TestCase):
+    # Verifica aliases e conflitos nas flags com prefixos compartilhados.
+    def test_flags(self):
+        parser = build_parser()
+        for short, long, field in (("-v", "--validate", "validate"), ("-d", "--download", "download"), ("-r", "--resume", "resume")):
+            self.assertEqual(getattr(parser.parse_args([short, "test.yaml"]), field), Path("test.yaml"))
+            self.assertEqual(getattr(parser.parse_args([long, "test.yaml"]), field), Path("test.yaml"))
+        self.assertTrue(parser.parse_args(["-dg"]).diagnose)
+        args = parser.parse_args(["-d", "test.yaml", "-de", "audio", "-y"])
+        self.assertEqual(args.destination, Path("audio"))
+        self.assertTrue(args.yes)
+        with patch("sys.stderr", new_callable=io.StringIO) as output:
+            with self.assertRaises(SystemExit) as error:
+                parser.parse_args(["-dg", "-d", "test.yaml"])
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn("argumentos inválidos", output.getvalue())
+
+    # Garante que validar não exige ferramentas de download instaladas.
+    def test_validation_without_external_tools(self):
+        with patch("remessa_musicas.cli.check_tools") as tools:
+            self.assertEqual(main(["-v", "exemplos/remessa.yaml"]), 0)
+            tools.assert_not_called()
 
 
 class ManifestTests(unittest.TestCase):
@@ -20,6 +45,30 @@ class ManifestTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.IsolatedAsyncioTestCase):
+    # Confere a animação, sua limpeza e a ausência de códigos de terminal em logs.
+    async def test_loading_indicator_cleanup(self):
+        terminal = io.StringIO()
+        with patch.object(terminal, "isatty", return_value=True), patch("sys.stderr", terminal):
+            async with loading_indicator():
+                await asyncio.sleep(0.15)
+        self.assertIn("Processando remessa...", terminal.getvalue())
+        self.assertTrue(terminal.getvalue().endswith("\r\033[2K"))
+        redirected = io.StringIO()
+        with patch("sys.stderr", redirected):
+            async with loading_indicator():
+                await asyncio.sleep(0)
+        self.assertEqual(redirected.getvalue(), "")
+
+    # Confere se a animação é limpa mesmo ao cancelar o processamento.
+    async def test_loading_indicator_cancelled(self):
+        terminal = io.StringIO()
+        with patch.object(terminal, "isatty", return_value=True), patch("sys.stderr", terminal):
+            with self.assertRaises(asyncio.CancelledError):
+                async with loading_indicator():
+                    await asyncio.sleep(0)
+                    raise asyncio.CancelledError
+        self.assertTrue(terminal.getvalue().endswith("\r\033[2K"))
+
     async def test_completion_and_resume(self):
         with tempfile.TemporaryDirectory() as temp:
             dest = Path(temp)
