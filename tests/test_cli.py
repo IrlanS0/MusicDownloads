@@ -1,5 +1,7 @@
 import asyncio
+import errno
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -126,6 +128,32 @@ class ManifestTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.IsolatedAsyncioTestCase):
+    # Simula volumes diferentes entre /tmp e Músicas durante a publicação do MP3.
+    async def test_conversion_publishes_across_filesystems(self):
+        with tempfile.TemporaryDirectory() as temp:
+            audio = Path(temp) / "Músicas"
+            logs = Path(temp) / "logs"
+            song = {"album": "teste", "name": "musics1", "url": "https://youtu.be/example", "key": "faixa"}
+            manifest = {"format": "mp3", "quality": 192, "config": {"attempts": 1, "delay": 0}}
+            original_replace = os.replace
+
+            async def fake_process(command, log):
+                if command[0] == "yt-dlp":
+                    Path(command[command.index("-o") + 1].replace("%(ext)s", "webm")).write_bytes(b"audio")
+                else:
+                    Path(command[-1]).write_bytes(b"mp3")
+
+            def different_volumes(source, destination):
+                if Path(destination).parent == audio / "teste" and Path(source).parent.parent != audio / "teste":
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                original_replace(source, destination)
+
+            with patch("remessa_musicas.cli.process", fake_process), patch("remessa_musicas.cli.os.replace", side_effect=different_volumes):
+                result = await run_song(song, manifest, audio, asyncio.Semaphore(1), asyncio.Semaphore(1), logs)
+            self.assertEqual(result["status"], "concluido")
+            self.assertEqual((audio / "teste" / "musics1.mp3").read_bytes(), b"mp3")
+            self.assertFalse(list((audio / "teste").glob(".musics-*")))
+
     async def test_audio_and_logs_use_separate_directories(self):
         with tempfile.TemporaryDirectory() as temp:
             audio = Path(temp) / "Músicas"

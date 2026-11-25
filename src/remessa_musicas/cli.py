@@ -285,7 +285,13 @@ async def run_song(song, manifest, destination, download_limit, convert_limit, l
                         await process(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-vn", "-map", "0:a:0", "-c:a", codec, "-b:a", f"{manifest['quality']}k", str(staging)], log)
                         if not staging.is_file() or not staging.stat().st_size:
                             raise RuntimeError("conversão não produziu arquivo válido")
-                    os.replace(staging, target)
+                    # Copia primeiro para o mesmo volume do destino; o rename final é atômico.
+                    with tempfile.TemporaryDirectory(prefix=".musics-", dir=album_destination) as publish_dir:
+                        local_staging = Path(publish_dir) / target.name
+                        shutil.copyfile(staging, local_staging)
+                        if target.exists() or target.is_symlink():
+                            raise RuntimeError(f"destino já existe: {target}; não foi sobrescrito")
+                        os.replace(local_staging, target)
                 log_message(f"[{song['name']}] concluído: {target}")
                 return {"status": "concluido", "album": song["album"], "file": target.name, "seconds": round(time.monotonic() - started, 1)}
             except asyncio.CancelledError:
