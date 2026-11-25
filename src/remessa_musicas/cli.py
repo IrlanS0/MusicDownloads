@@ -82,7 +82,8 @@ def read_manifest(path: Path) -> dict:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("a remessa deve ser um objeto YAML")
-    folder = safe_name(data.get("pasta"))
+    if "pasta" in data or "musicas" in data:
+        raise ValueError("formato antigo: use 'albuns' com 'nome' e 'musicas' em cada álbum")
     fmt = data.get("formato", "mp3")
     if fmt not in FORMATS:
         raise ValueError(f"formato deve ser um de {', '.join(sorted(FORMATS))}")
@@ -96,27 +97,40 @@ def read_manifest(path: Path) -> dict:
         "attempts": integer(config.get("tentativas", 3), "tentativas", 1, 10),
         "delay": integer(config.get("intervalo_tentativas", 3), "intervalo_tentativas", 0, 60),
     }
-    rows = data.get("musicas")
-    if not isinstance(rows, list) or not rows:
-        raise ValueError("musicas deve ser uma lista não vazia")
+    albums = data.get("albuns")
+    if not isinstance(albums, list) or not albums:
+        raise ValueError("albuns deve ser uma lista não vazia")
     songs = []
-    seen_names = set()
-    for idx, row in enumerate(rows, 1):
-        if not isinstance(row, dict):
-            raise ValueError(f"item {idx}: esperado nome e url")
-        name = safe_name(row.get("nome"))
-        url = row.get("url")
-        if not isinstance(url, str):
-            raise ValueError(f"item {idx}: URL inválida")
-        parsed = urlparse(url)
-        if parsed.scheme != "https" or parsed.hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"} or parsed.username or parsed.password:
-            raise ValueError(f"item {idx}: somente URLs HTTPS do YouTube são aceitas")
-        if name.casefold() in seen_names:
-            raise ValueError(f"item {idx}: nome repetido: {name}")
-        seen_names.add(name.casefold())
-        key = hashlib.sha256((name + "\0" + url).encode()).hexdigest()[:16]
-        songs.append({"name": name, "url": url, "key": key})
-    return {"folder": folder, "format": fmt, "quality": quality, "config": limits, "songs": songs}
+    seen_albums = set()
+    album_names = []
+    for album_index, album_data in enumerate(albums, 1):
+        if not isinstance(album_data, dict):
+            raise ValueError(f"álbum {album_index}: esperado nome e lista de músicas")
+        album = safe_name(album_data.get("nome"))
+        if album.casefold() in seen_albums:
+            raise ValueError(f"álbum {album_index}: nome repetido: {album}")
+        seen_albums.add(album.casefold())
+        album_names.append(album)
+        rows = album_data.get("musicas")
+        if not isinstance(rows, list) or not rows:
+            raise ValueError(f"álbum {album}: musicas deve ser uma lista não vazia")
+        seen_names = set()
+        for idx, row in enumerate(rows, 1):
+            if not isinstance(row, dict):
+                raise ValueError(f"álbum {album}, item {idx}: esperado nome e url")
+            name = safe_name(row.get("nome"))
+            url = row.get("url")
+            if not isinstance(url, str):
+                raise ValueError(f"álbum {album}, item {idx}: URL inválida")
+            parsed = urlparse(url)
+            if parsed.scheme != "https" or parsed.hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"} or parsed.username or parsed.password:
+                raise ValueError(f"álbum {album}, item {idx}: somente URLs HTTPS do YouTube são aceitas")
+            if name.casefold() in seen_names:
+                raise ValueError(f"álbum {album}, item {idx}: música repetida: {name}")
+            seen_names.add(name.casefold())
+            key = hashlib.sha256((album + "\0" + name + "\0" + url).encode()).hexdigest()[:16]
+            songs.append({"album": album, "name": name, "url": url, "key": key})
+    return {"albums": album_names, "format": fmt, "quality": quality, "config": limits, "songs": songs}
 
 
 # Verifica as ferramentas externas necessárias ao processamento.
@@ -193,6 +207,8 @@ async def loading_indicator():
 # Baixa e converte uma faixa, respeitando limites e novas tentativas.
 async def run_song(song, manifest, destination, download_limit, convert_limit, logs=None):
     key = song["key"]
+    album_destination = destination / song["album"]
+    album_destination.mkdir(parents=True, exist_ok=True)
     logs = logs or destination
     log_dir = logs / key
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -213,7 +229,7 @@ async def run_song(song, manifest, destination, download_limit, convert_limit, l
                     log_message(f"[{song['name']}] conversão")
                     fmt = manifest["format"]
                     extension = source.suffix if fmt == "original" else "." + fmt
-                    target = destination / (song["name"] + extension)
+                    target = album_destination / (song["name"] + extension)
                     if target.exists():
                         raise RuntimeError(f"destino já existe: {target}; não foi sobrescrito")
                     staging = temp / ("convertido" + extension)
@@ -226,13 +242,13 @@ async def run_song(song, manifest, destination, download_limit, convert_limit, l
                             raise RuntimeError("conversão não produziu arquivo válido")
                     os.replace(staging, target)
                 log_message(f"[{song['name']}] concluído: {target}")
-                return {"status": "concluido", "file": target.name, "seconds": round(time.monotonic() - started, 1)}
+                return {"status": "concluido", "album": song["album"], "file": target.name, "seconds": round(time.monotonic() - started, 1)}
             except asyncio.CancelledError:
                 raise
             except (OSError, RuntimeError) as exc:
                 error = str(exc)
                 log_message(f"[{song['name']}] falha: {error}", file=sys.stderr)
-                if attempt < manifest["config"]["attempts"] and not (destination / (song["name"] + ("." + manifest["format"] if manifest["format"] != "original" else ""))).exists():
+                if attempt < manifest["config"]["attempts"] and not (album_destination / (song["name"] + ("." + manifest["format"] if manifest["format"] != "original" else ""))).exists():
                     await asyncio.sleep(manifest["config"]["delay"] * attempt)
                     continue
                 return {"status": "falhou", "error": error, "attempts": attempt}
@@ -256,7 +272,7 @@ async def execute(manifest, destination, resume, logs=None):
     tasks = []
     for song in manifest["songs"]:
         previous = state.get(song["key"])
-        if resume and isinstance(previous, dict) and previous.get("status") == "concluido" and isinstance(previous.get("file"), str) and (destination / previous["file"]).is_file():
+        if resume and isinstance(previous, dict) and previous.get("status") == "concluido" and previous.get("album") == song["album"] and isinstance(previous.get("file"), str) and previous["file"] == song["name"] + Path(previous["file"]).suffix and (destination / song["album"] / previous["file"]).is_file():
             log_message(f"[{song['name']}] já concluído")
             continue
         tasks.append(asyncio.create_task(named_task(song, manifest, destination, dl_limit, cv_limit, session)))
@@ -334,10 +350,12 @@ def main(argv=None):
     try:
         if args.diagnose:
             return 0 if check_tools() else 1
-        manifest = read_manifest(args.validate or args.download or args.resume)
-        destination = (args.destination.expanduser() if args.destination else music_directory()) / manifest["folder"]
-        logs = Path.cwd() / "downloads" / manifest["folder"]
-        print(f"Remessa: {manifest['folder']} | {len(manifest['songs'])} músicas | {manifest['format']} | destino: {destination}")
+        manifest_path = args.validate or args.download or args.resume
+        manifest = read_manifest(manifest_path)
+        destination = args.destination.expanduser() if args.destination else music_directory()
+        manifest_id = hashlib.sha256(str(manifest_path.resolve()).encode()).hexdigest()[:8]
+        logs = Path.cwd() / "downloads" / f"{safe_name(manifest_path.stem)}-{manifest_id}"
+        print(f"Remessa: {len(manifest['albums'])} álbuns, {len(manifest['songs'])} músicas | {manifest['format']} | destino: {destination}")
         if args.validate:
             return 0
         if not check_tools():

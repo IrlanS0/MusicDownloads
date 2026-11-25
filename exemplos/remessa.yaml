@@ -1,4 +1,3 @@
-pasta: "Minha remessa"
 formato: "mp3" # mp3, m4a, opus ou original
 qualidade: 192 # bitrate do arquivo final; não aumenta a qualidade da fonte
 execucao:
@@ -6,6 +5,14 @@ execucao:
   conversoes_simultaneas: 2
   tentativas: 3
   intervalo_tentativas: 3
-musicas:
-  - nome: "Nome da faixa"
-    url: "https://www.youtube.com/watch?v=SUBSTITUA_PELO_ID"
+albuns:
+  - nome: "Álbum 1"
+    musicas:
+      - nome: "Primeira faixa"
+        url: "https://www.youtube.com/watch?v=SUBSTITUA_PELO_ID"
+      - nome: "Segunda faixa"
+        url: "https://www.youtube.com/watch?v=OUTRO_ID"
+  - nome: "Álbum 2"
+    musicas:
+      - nome: "Primeira faixa"
+        url: "https://www.youtube.com/watch?v=TERCEIRO_ID"

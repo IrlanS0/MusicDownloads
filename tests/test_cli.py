@@ -58,21 +58,32 @@ class ManifestTests(unittest.TestCase):
     def test_rejects_path_traversal_and_duplicate_names(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "remessa.yaml"
-            path.write_text('pasta: "../fora"\nmusicas:\n  - nome: Teste\n    url: https://youtu.be/example\n')
+            path.write_text('albuns:\n  - nome: "../fora"\n    musicas:\n      - nome: Teste\n        url: https://youtu.be/example\n')
             with self.assertRaises(ValueError):
                 read_manifest(path)
-            path.write_text('pasta: Dentro\nmusicas:\n  - nome: Teste\n    url: https://youtu.be/one\n  - nome: teste\n    url: https://youtu.be/two\n')
+            path.write_text('albuns:\n  - nome: Dentro\n    musicas:\n      - nome: Teste\n        url: https://youtu.be/one\n      - nome: teste\n        url: https://youtu.be/two\n')
             with self.assertRaises(ValueError):
                 read_manifest(path)
+            path.write_text('pasta: Antigo\nmusicas:\n  - nome: Teste\n    url: https://youtu.be/one\n')
+            with self.assertRaisesRegex(ValueError, "formato antigo"):
+                read_manifest(path)
+
+    def test_two_albums_allow_same_song_name_and_have_distinct_keys(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "remessa.yaml"
+            path.write_text('albuns:\n  - nome: Álbum 1\n    musicas:\n      - nome: Faixa\n        url: https://youtu.be/same\n  - nome: Álbum 2\n    musicas:\n      - nome: Faixa\n        url: https://youtu.be/same\n')
+            manifest = read_manifest(path)
+            self.assertEqual(manifest["albums"], ["Álbum 1", "Álbum 2"])
+            self.assertEqual(len({song["key"] for song in manifest["songs"]}), 2)
 
 
 class ExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_audio_and_logs_use_separate_directories(self):
         with tempfile.TemporaryDirectory() as temp:
-            audio = Path(temp) / "Músicas" / "Lote"
+            audio = Path(temp) / "Músicas"
             logs = Path(temp) / "projeto" / "downloads" / "Lote"
             audio.mkdir(parents=True)
-            song = {"name": "Exemplo", "url": "https://youtu.be/example", "key": "faixa"}
+            song = {"album": "Lote", "name": "Exemplo", "url": "https://youtu.be/example", "key": "faixa"}
             manifest = {"format": "original", "config": {"attempts": 1, "delay": 0}}
 
             async def fake_process(command, log):
@@ -82,7 +93,7 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             with patch("remessa_musicas.cli.process", fake_process):
                 result = await run_song(song, manifest, audio, asyncio.Semaphore(1), asyncio.Semaphore(1), logs)
             self.assertEqual(result["status"], "concluido")
-            self.assertTrue((audio / "Exemplo.webm").exists())
+            self.assertTrue((audio / "Lote" / "Exemplo.webm").exists())
             self.assertTrue((logs / "faixa" / "execucao.log").exists())
             self.assertFalse(list(logs.rglob("*.webm")))
 
@@ -113,15 +124,17 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_completion_and_resume(self):
         with tempfile.TemporaryDirectory() as temp:
             dest = Path(temp)
-            songs = [{"name": name, "url": f"https://youtu.be/{name}", "key": name} for name in ("um", "dois")]
+            songs = [{"album": album, "name": "Faixa", "url": "https://youtu.be/faixa", "key": album} for album in ("um", "dois")]
             manifest = {"songs": songs, "config": {"downloads": 5, "conversions": 2}}
             called = []
 
             async def fake_run(song, config, destination, dl_limit, cv_limit, logs):
-                called.append(song["name"])
-                await asyncio.sleep(0.01 if song["name"] == "um" else 0)
-                (destination / (song["name"] + ".mp3")).write_bytes(b"audio")
-                return {"status": "concluido", "file": song["name"] + ".mp3"}
+                called.append(song["album"])
+                await asyncio.sleep(0.01 if song["album"] == "um" else 0)
+                album_dir = destination / song["album"]
+                album_dir.mkdir(exist_ok=True)
+                (album_dir / "Faixa.mp3").write_bytes(b"audio")
+                return {"status": "concluido", "album": song["album"], "file": "Faixa.mp3"}
 
             with patch("remessa_musicas.cli.run_song", fake_run):
                 self.assertTrue(await execute(manifest, dest, False))
@@ -129,6 +142,10 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(called, ["um", "dois"])
             self.assertTrue((dest / "resultado.json").is_file())
             self.assertEqual(len(list((dest / "sessoes").iterdir())), 2)
+            (dest / "um" / "Faixa.mp3").unlink()
+            with patch("remessa_musicas.cli.run_song", fake_run):
+                self.assertTrue(await execute(manifest, dest, True))
+            self.assertEqual(called, ["um", "dois", "um"])
 
 
 if __name__ == "__main__":

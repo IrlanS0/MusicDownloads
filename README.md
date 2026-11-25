@@ -59,13 +59,31 @@ Referências: [instalação oficial do yt-dlp](https://github.com/yt-dlp/yt-dlp/
 
 Edite uma cópia de `exemplos/remessa.yaml` e use:
 
+```yaml
+formato: "mp3"
+qualidade: 192
+albuns:
+  - nome: "Álbum 1"
+    musicas:
+      - nome: "Primeira faixa"
+        url: "https://www.youtube.com/watch?v=ID_1"
+      - nome: "Segunda faixa"
+        url: "https://www.youtube.com/watch?v=ID_2"
+  - nome: "Álbum 2"
+    musicas:
+      - nome: "Primeira faixa"
+        url: "https://www.youtube.com/watch?v=ID_3"
+```
+
+Cada álbum vira uma pasta na biblioteca de músicas. Nomes de faixas podem se repetir em álbuns diferentes, mas não dentro do mesmo álbum. O formato anterior (`pasta` e `musicas` na raiz) deve ser convertido para `albuns`.
+
 ```bash
 musics -v minha-remessa.yaml
 musics -d minha-remessa.yaml
 musics -r minha-remessa.yaml
 ```
 
-Os áudios são salvos na pasta de músicas do usuário (`Músicas/<pasta>` no Windows em português; no Linux, segue `XDG_MUSIC_DIR`; no macOS, `~/Music`). Use `-de /caminho/para/musicas` ou `--destination` para escolher outra pasta base. Os logs ficam em `downloads/<pasta>/sessoes/` no diretório de onde o comando é executado. O programa mantém somente as três sessões mais recentes de logs; as antigas são removidas automaticamente após a execução. O estado `downloads/<pasta>/resultado.json` fica separado dos logs e é preservado para permitir `-r`. Não edite esse arquivo manualmente. A opção `-y`/`--yes` dispensa a pergunta interativa, mas somente use para arquivos cujo conteúdo você conhece.
+Os áudios são salvos na pasta de músicas do usuário (`Músicas/<álbum>` no Windows em português; no Linux, segue `XDG_MUSIC_DIR`; no macOS, `~/Music`). Use `-de /caminho/para/musicas` ou `--destination` para escolher outra pasta base. Os logs ficam em `downloads/<nome-do-yaml>-<id>/sessoes/` no diretório de onde o comando é executado. O identificador evita misturar remessas com nomes de arquivo iguais em locais diferentes. O programa mantém somente as três sessões mais recentes de logs; as antigas são removidas automaticamente após a execução. O estado `downloads/<nome-do-yaml>-<id>/resultado.json` fica separado dos logs e é preservado para permitir `-r`. Não edite esse arquivo manualmente. A opção `-y`/`--yes` dispensa a pergunta interativa, mas somente use para arquivos cujo conteúdo você conhece.
 
 | Operação | Flag curta | Flag longa |
 | --- | --- | --- |
