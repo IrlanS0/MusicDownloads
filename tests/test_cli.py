@@ -1,6 +1,7 @@
 import asyncio
 import errno
 import io
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -201,7 +202,7 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp:
             dest = Path(temp)
             songs = [{"album": album, "name": "Faixa", "url": "https://youtu.be/faixa", "key": album} for album in ("um", "dois")]
-            manifest = {"songs": songs, "config": {"downloads": 5, "conversions": 2}}
+            manifest = {"songs": songs, "config": {"downloads": 5, "conversions": 2}, "_retry_file": dest / "retomada.json"}
             called = []
 
             async def fake_run(song, config, destination, dl_limit, cv_limit, logs):
@@ -222,6 +223,41 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             with patch("remessa_musicas.cli.run_song", fake_run):
                 self.assertTrue(await execute(manifest, dest, True))
             self.assertEqual(called, ["um", "dois", "um"])
+
+    # Verifica persistência de falhas e retomada de uma faixa ou de toda a fila.
+    async def test_retry_queue_and_single_or_batch_resume(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            queue = root / "retomada.json"
+            source = root / "lista.txt"
+            source.write_text("Álbum | Um | https://youtu.be/one\nÁlbum | Dois | https://youtu.be/two\n", encoding="utf-8")
+            manifest = read_song_list(source)
+            manifest["_retry_file"] = queue
+
+            async def fail(song, *args):
+                return {"status": "falhou", "error": "sem conexão"}
+
+            with patch("remessa_musicas.cli.run_song", fail):
+                self.assertFalse(await execute(manifest, root / "audio", False, root / "logs"))
+            self.assertEqual(len(json.loads(queue.read_text())["items"]), 2)
+
+            async def succeed(song, manifest, destination, *args):
+                folder = destination / song["album"]
+                folder.mkdir(exist_ok=True)
+                (folder / (song["name"] + ".mp3")).write_bytes(b"audio")
+                return {"status": "concluido", "album": song["album"], "file": song["name"] + ".mp3"}
+
+            # main executa seu próprio loop; roda em thread para testar o comando real.
+            with patch("remessa_musicas.cli.run_song", succeed), patch("remessa_musicas.cli.check_tools", return_value=True), patch("pathlib.Path.cwd", return_value=root):
+                (root / "downloads").mkdir()
+                default_queue = root / "downloads" / "retomada.json"
+                queue.replace(default_queue)
+                self.assertEqual(await asyncio.to_thread(main, ["-r", "-y"]), 0)
+                remaining = json.loads(default_queue.read_text())["items"]
+                self.assertEqual(len(remaining), 1)
+                self.assertEqual(await asyncio.to_thread(main, ["-r", "-dir", "-y"]), 0)
+                self.assertEqual(json.loads(default_queue.read_text())["items"], [])
+                self.assertEqual(await asyncio.to_thread(main, ["-r", "-dir", str(default_queue), "-y"]), 0)
 
 
 if __name__ == "__main__":

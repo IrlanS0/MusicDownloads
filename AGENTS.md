@@ -22,6 +22,8 @@ O programa deve ser um orquestrador robusto de ferramentas locais. Nao automatiz
   - `musics -v <remessa.yaml>` / `musics --validate <remessa.yaml>`
   - `musics -d <remessa.yaml>` / `musics --download <remessa.yaml>`
   - `musics -r <remessa.yaml>` / `musics --resume <remessa.yaml>`
+  - `musics -r`: retoma a primeira faixa da fila automatica `downloads/retomada.json`.
+  - `musics -r -dir [arquivo]`: retoma toda a fila padrao, uma fila JSON indicada ou uma lista CSV/TXT/YAML indicada.
 - Flags auxiliares: `-de`/`--destination`, `-y`/`--yes`, `-h`/`--help`.
 - Comandos em ingles; mensagens e ajuda em portugues. YAML permanece em portugues.
 - Mostrar indicador giratorio durante o processamento em terminal interativo; limpar ao terminar ou cancelar e desativar em saida redirecionada.
@@ -68,6 +70,8 @@ Usar duas filas independentes:
 Controlar os dois limites separadamente, por exemplo com `asyncio.Semaphore`. Nao multiplicar acidentalmente a concorrencia usando varios fragmentos simultaneos por item; na primeira versao, manter a concorrencia interna de fragmentos do `yt-dlp` em 1.
 
 Uma falha individual nao deve cancelar toda a remessa. Implementar novas tentativas com espera progressiva, registro do erro e possibilidade de retomada.
+
+Persistir pendencias em `downloads/retomada.json` antes de iniciar o processamento e atualizar a cada resultado. Preservar falhas e interrupcoes, remover sucessos e conservar itens de outras remessas. Cada faixa guarda album, nome, URL, configuracoes, formato, qualidade, destino e diretorio de estado para retomada.
 
 ## Comportamento de download
 

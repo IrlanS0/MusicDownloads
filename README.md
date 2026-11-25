@@ -83,6 +83,20 @@ musics -d minha-remessa.yaml
 musics -r minha-remessa.yaml
 ```
 
+### Retomada de falhas e interrupções
+
+O programa mantém automaticamente `downloads/retomada.json` no diretório de onde você executa os comandos. Essa fila reúne faixas pendentes de diferentes remessas (YAML, CSV, TXT ou cadastro interativo), incluindo falhas de download, conversão e publicação do áudio. Cada item preserva álbum, nome, URL, formato, qualidade, configurações e destino. A fila é atualizada a cada resultado: faixas concluídas são removidas; falhas e faixas interrompidas permanecem. Execute no mesmo diretório para encontrar a fila padrão.
+
+```bash
+musics -r                         # retoma somente a primeira faixa pendente
+musics -r -dir                    # retoma todas as faixas da fila padrão
+musics -r -dir outra/retomada.json # retoma uma fila indicada
+musics -r -dir lista.csv          # retoma uma lista CSV (também aceita TXT e YAML)
+musics -r remessa.yaml            # forma anterior continua disponível
+```
+
+Use `-y` para dispensar a confirmação ou `-de PASTA` para escolher outro destino. Se não houver pendências, o programa informa isso e encerra sem baixar. O arquivo JSON é gerenciado pelo programa; conserve-o separado dos logs de sessão. Os arquivos de retomada são criados a partir das execuções desta versão; falhas anteriores podem ser processadas novamente com a lista original para entrar na fila.
+
 ### Adição interativa e importação de listas
 
 Depois de instalar ou atualizar o projeto com `pipx install --force --include-deps .`, execute `music add`. O programa pede o nome do álbum, o nome da faixa e a URL; valida os dados e inicia o download imediatamente em formato MP3 (192 kb/s). `musics add` também funciona.
@@ -119,7 +133,9 @@ Os áudios são salvos na pasta de músicas do usuário (`Músicas/<álbum>` no 
 | Diagnosticar dependências | `-dg` | `--diagnose` |
 | Validar remessa | `-v ARQUIVO` | `--validate ARQUIVO` |
 | Baixar remessa | `-d ARQUIVO` | `--download ARQUIVO` |
-| Retomar remessa | `-r ARQUIVO` | `--resume ARQUIVO` |
+| Retomar uma faixa pendente | `-r` | `--resume` |
+| Retomar uma lista ou fila | `-r -dir [ARQUIVO]` | `--resume --directory [ARQUIVO]` |
+| Retomar remessa indicada | `-r ARQUIVO` | `--resume ARQUIVO` |
 | Escolher destino | `-de PASTA` | `--destination PASTA` |
 | Confirmar execução | `-y` | `--yes` |
 | Exibir ajuda | `-h` | `--help` |

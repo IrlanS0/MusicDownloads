@@ -318,6 +318,14 @@ async def execute(manifest, destination, resume, logs=None):
     state = json.loads(state_path.read_text(encoding="utf-8")) if resume and state_path.exists() else {}
     if not isinstance(state, dict):
         raise ValueError("resultado.json inválido")
+    retry_path = manifest.get("_retry_file", Path.cwd() / "downloads" / "retomada.json")
+    queue = read_retry_queue(retry_path)
+    entries = [retry_entry(song, manifest, destination, logs) for song in manifest["songs"]]
+    for entry in entries:
+        queue["items"] = [item for item in queue["items"] if item != entry]
+        queue["items"].append(entry)
+    retry_path.parent.mkdir(parents=True, exist_ok=True)
+    write_state(retry_path, queue)
     dl_limit = asyncio.Semaphore(manifest["config"]["downloads"])
     cv_limit = asyncio.Semaphore(manifest["config"]["conversions"])
     tasks = []
@@ -325,6 +333,8 @@ async def execute(manifest, destination, resume, logs=None):
         previous = state.get(song["key"])
         if resume and isinstance(previous, dict) and previous.get("status") == "concluido" and previous.get("album") == song["album"] and isinstance(previous.get("file"), str) and previous["file"] == song["name"] + Path(previous["file"]).suffix and (destination / song["album"] / previous["file"]).is_file():
             log_message(f"[{song['name']}] já concluído")
+            queue["items"].remove(retry_entry(song, manifest, destination, logs))
+            write_state(retry_path, queue)
             continue
         tasks.append(asyncio.create_task(named_task(song, manifest, destination, dl_limit, cv_limit, session)))
     try:
@@ -332,6 +342,9 @@ async def execute(manifest, destination, resume, logs=None):
             song, result = await future
             state[song["key"]] = result
             write_state(state_path, state)
+            if result["status"] == "concluido":
+                queue["items"].remove(retry_entry(song, manifest, destination, logs))
+            write_state(retry_path, queue)
     finally:
         for task in tasks:
             if not task.done():
@@ -342,7 +355,77 @@ async def execute(manifest, destination, resume, logs=None):
     current = [state.get(song["key"]) for song in manifest["songs"]]
     counts = {status: sum(isinstance(row, dict) and row.get("status") == status for row in current) for status in ("concluido", "falhou")}
     log_message(f"Resultado: {counts['concluido']} concluídos, {counts['falhou']} falhos. Relatório: {state_path}")
+    if queue["items"]:
+        log_message(f"Retomada: {retry_path} — use 'musics -r' ou 'musics -r -dir'.")
     return not counts["falhou"]
+
+
+# Guarda a faixa, suas configurações e o destino necessários para uma nova tentativa.
+def retry_entry(song, manifest, destination, logs):
+    return {"album": song["album"], "name": song["name"], "url": song["url"],
+            "format": manifest.get("format", "mp3"), "quality": manifest.get("quality", 192),
+            "config": manifest["config"], "destination": str(destination.resolve()), "logs": str(logs.resolve())}
+
+
+# Lê a fila persistente sem descartar itens de outras remessas.
+def read_retry_queue(path):
+    if not path.exists():
+        return {"version": 1, "items": []}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("items"), list):
+        raise ValueError("arquivo de retomada inválido")
+    for item in data["items"]:
+        if not isinstance(item, dict) or not all(key in item for key in ("album", "name", "url", "format", "quality", "config", "destination", "logs")):
+            raise ValueError("item inválido no arquivo de retomada")
+    return data
+
+
+# Reconstrói uma remessa validada a partir de um item da fila de retomada.
+def manifest_from_retry(item):
+    config = item["config"]
+    if not isinstance(config, dict):
+        raise ValueError("configuração de retomada inválida")
+    return validate_manifest({"formato": item["format"], "qualidade": item["quality"],
+        "execucao": {"downloads_simultaneos": config.get("downloads", 5), "conversoes_simultaneas": config.get("conversions", 2),
+                     "tentativas": config.get("attempts", 3), "intervalo_tentativas": config.get("delay", 3)},
+        "albuns": [{"nome": item["album"], "musicas": [{"nome": item["name"], "url": item["url"]}]}]})
+
+
+# Retoma a primeira faixa pendente ou todos os itens de uma fila, preservando as demais.
+def resume_queue(args):
+    path = Path(args.directory).expanduser() if args.directory else Path.cwd() / "downloads" / "retomada.json"
+    if not path.is_file():
+        raise ValueError(f"arquivo de retomada não encontrado: {path}")
+    queue = read_retry_queue(path)
+    items = queue["items"] if args.directory is not None else queue["items"][:1]
+    if not items:
+        print("Nenhuma música pendente para retomar.")
+        return 0
+    groups = {}
+    for item in items:
+        manifest = manifest_from_retry(item)
+        destination = args.destination.expanduser() if args.destination else Path(item["destination"])
+        logs = Path(item["logs"])
+        key = (str(destination), str(logs), manifest["format"], manifest["quality"], json.dumps(manifest["config"], sort_keys=True))
+        if key in groups:
+            groups[key][0]["songs"].extend(manifest["songs"])
+        else:
+            manifest["_retry_file"] = path
+            groups[key] = (manifest, destination, logs)
+    if not check_tools():
+        return 1
+    if not args.yes and input(f"Retomar {len(items)} música(s)? [s/N] ").strip().casefold() not in {"s", "sim"}:
+        print("Cancelado.")
+        return 0
+    if args.destination:
+        # A alteração de destino também atualiza os itens originais da fila.
+        for item in items:
+            item["destination"] = str(args.destination.expanduser().resolve())
+        write_state(path, queue)
+    success = True
+    for manifest, destination, logs in groups.values():
+        success = asyncio.run(execute_with_loading(manifest, destination, True, logs)) and success
+    return 0 if success else 1
 
 
 # Associa o resultado assíncrono à faixa que o produziu.
@@ -388,7 +471,8 @@ def build_parser():
     actions.add_argument("-dg", "--diagnose", action="store_true", help="verifica as dependências")
     actions.add_argument("-v", "--validate", type=Path, metavar="ARQUIVO", help="valida uma remessa YAML")
     actions.add_argument("-d", "--download", type=Path, metavar="ARQUIVO", help="baixa uma remessa")
-    actions.add_argument("-r", "--resume", type=Path, metavar="ARQUIVO", help="retoma uma remessa interrompida")
+    actions.add_argument("-r", "--resume", nargs="?", const=True, type=Path, metavar="ARQUIVO", help="retoma uma faixa pendente ou uma remessa indicada")
+    parser.add_argument("-dir", "--directory", nargs="?", const="", metavar="ARQUIVO", help="com -r, retoma uma lista; sem caminho, usa downloads/retomada.json")
     parser.add_argument("-de", "--destination", type=Path, metavar="PASTA",
                         default=None, help="substitui a pasta de músicas padrão")
     parser.add_argument("-y", "--yes", action="store_true", help="confirma a execução sem perguntar")
@@ -452,11 +536,19 @@ def main(argv=None):
             return 130
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.directory is not None and (args.resume is None or args.resume is not True):
+        parser.error("use -r -dir [ARQUIVO]")
     try:
         if args.diagnose:
             return 0 if check_tools() else 1
-        manifest_path = args.validate or args.download or args.resume
-        manifest = read_manifest(manifest_path)
+        if args.resume is True and (not args.directory or Path(args.directory).suffix.casefold() == ".json"):
+            return resume_queue(args)
+        if args.directory:
+            manifest_path = Path(args.directory).expanduser()
+            manifest = read_song_list(manifest_path) if manifest_path.suffix.casefold() in {".txt", ".csv"} else read_manifest(manifest_path)
+        else:
+            manifest_path = args.validate or args.download or args.resume
+            manifest = read_song_list(manifest_path) if args.resume and manifest_path.suffix.casefold() in {".txt", ".csv"} else read_manifest(manifest_path)
         destination = args.destination.expanduser() if args.destination else music_directory()
         logs = logs_for_file(manifest_path)
         print(f"Remessa: {len(manifest['albums'])} álbuns, {len(manifest['songs'])} músicas | {manifest['format']} | destino: {destination}")
@@ -472,7 +564,7 @@ def main(argv=None):
         print(f"Erro: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        print("Interrompido; use 'musics -r ARQUIVO' para continuar.", file=sys.stderr)
+        print("Interrompido; use 'musics -r -dir' para continuar.", file=sys.stderr)
         return 130
 
 
