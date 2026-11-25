@@ -77,6 +77,8 @@ albuns:
 
 Cada álbum vira uma pasta na biblioteca de músicas. Nomes de faixas podem se repetir em álbuns diferentes; no mesmo álbum, apenas a primeira ocorrência é considerada. O formato anterior (`pasta` e `musicas` na raiz) deve ser convertido para `albuns`.
 
+Links repetidos no mesmo álbum também geram um aviso: somente a primeira faixa é considerada, mesmo que os nomes sejam diferentes. URLs `youtu.be`, `watch?v=`, `shorts`, `embed` e `live` que apontem para o mesmo vídeo são reconhecidas; parâmetros de playlist, rádio e tempo não criam uma faixa diferente. A verificação ocorre na leitura da lista e antes do download, inclusive após editar links na retomada. O mesmo vídeo pode aparecer em álbuns diferentes. Essa verificação considera a lista da execução, sem consultar um histórico global de downloads.
+
 ```bash
 musics -v minha-remessa.yaml
 musics -d minha-remessa.yaml

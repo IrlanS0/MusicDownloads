@@ -16,12 +16,41 @@ import subprocess
 import sys
 import tempfile
 import time
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import yaml
 
 
 FORMATS = {"mp3", "m4a", "opus", "original"}
+
+
+# Identifica o vídeo independentemente do domínio, da playlist e de parâmetros extras.
+def video_identity(url):
+    parsed = urlparse(url.strip())
+    parts = parsed.path.strip("/").split("/")
+    video = None
+    if parsed.hostname == "youtu.be" and len(parts) == 1:
+        video = parts[0]
+    elif parsed.path.rstrip("/") == "/watch":
+        video = parse_qs(parsed.query).get("v", [None])[0]
+    elif len(parts) == 2 and parts[0] in {"shorts", "embed", "live"}:
+        video = parts[1]
+    return ("video", video) if video else ("url", url.strip())
+
+
+# Mantém o primeiro link de cada vídeo no mesmo álbum e avisa sobre os demais.
+def unique_song_links(songs):
+    seen = set()
+    kept, ignored = [], []
+    for song in songs:
+        key = (song.get("destination", ""), song["album"].casefold(), video_identity(song["url"]))
+        if key in seen:
+            log_message(f"Aviso: álbum {song['album']}: link repetido em '{song['name']}'; ignorado (primeira ocorrência mantida).", file=sys.stderr)
+            ignored.append(song)
+        else:
+            seen.add(key)
+            kept.append(song)
+    return kept, ignored
 
 
 # Resolve a pasta de músicas do usuário conforme o sistema operacional.
@@ -137,6 +166,7 @@ def validate_manifest(data: dict) -> dict:
             seen_names.add(name.casefold())
             key = hashlib.sha256((album + "\0" + name + "\0" + url).encode()).hexdigest()[:16]
             songs.append({"album": album, "name": name, "url": url, "key": key})
+    songs, _ = unique_song_links(songs)
     return {"albums": album_names, "format": fmt, "quality": quality, "config": limits, "songs": songs}
 
 
@@ -320,6 +350,10 @@ async def execute(manifest, destination, resume, logs=None):
         raise ValueError("resultado.json inválido")
     retry_path = manifest.get("_retry_file", Path.cwd() / "downloads" / "retomada.json")
     queue = read_retry_queue(retry_path)
+    songs, ignored = unique_song_links(manifest["songs"])
+    manifest = {**manifest, "songs": songs}
+    ignored_entries = [retry_entry(song, manifest, destination, logs) for song in ignored]
+    queue["items"] = [item for item in queue["items"] if item not in ignored_entries]
     entries = [retry_entry(song, manifest, destination, logs) for song in manifest["songs"]]
     for entry in entries:
         queue["items"] = [item for item in queue["items"] if item != entry]
@@ -408,6 +442,11 @@ def resume_queue(args):
             print("Cancelado.")
             return 0
         edit_retry_links(items)
+        write_state(path, queue)
+    items, ignored = unique_song_links(items)
+    if ignored:
+        for item in ignored:
+            queue["items"].remove(item)
         write_state(path, queue)
     groups = {}
     for item in items:

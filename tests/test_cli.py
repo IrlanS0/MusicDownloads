@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from remessa_musicas.cli import build_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, read_song_list, retry_entry, logs_for_file, run_song
+from remessa_musicas.cli import build_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, read_song_list, retry_entry, logs_for_file, run_song, manifest_from_rows
 
 
 class CommandTests(unittest.TestCase):
@@ -82,6 +82,19 @@ class CommandTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
+    # Evita o mesmo vídeo no álbum, inclusive com URLs diferentes e parâmetros extras.
+    def test_duplicate_video_links(self):
+        rows = [("Álbum", "Primeira", "https://www.youtube.com/watch?v=AbC123&list=lista"),
+                ("Álbum", "Mesmo link", "https://www.youtube.com/watch?v=AbC123&list=lista"),
+                ("Álbum", "Curto", "https://youtu.be/AbC123?t=30"),
+                ("Álbum", "Short", "https://www.youtube.com/shorts/AbC123"),
+                ("Álbum", "Outro vídeo", "https://music.youtube.com/watch?v=abc123"),
+                ("Outro álbum", "Permitida", "https://youtu.be/AbC123")]
+        with patch("sys.stderr", new_callable=io.StringIO) as warnings:
+            manifest = manifest_from_rows(rows)
+        self.assertEqual([song["name"] for song in manifest["songs"]], ["Primeira", "Outro vídeo", "Permitida"])
+        self.assertEqual(warnings.getvalue().count("link repetido"), 3)
+
     # Agrupa linhas de um álbum, ignora duplicatas e rejeita listas malformadas.
     def test_import_formats(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -148,6 +161,25 @@ class ManifestTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.IsolatedAsyncioTestCase):
+    # Detecta duplicatas surgidas na retomada antes de enfileirar downloads concorrentes.
+    async def test_duplicate_links_before_execution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = manifest_from_rows([("Álbum", "Primeira", "https://youtu.be/one"), ("Álbum", "Segunda", "https://youtu.be/two")])
+            manifest["songs"][1]["url"] = "https://www.youtube.com/watch?v=one&list=radio"
+            manifest["_retry_file"] = root / "retomada.json"
+            called = []
+
+            async def fail(song, *args):
+                called.append(song["name"])
+                return {"status": "falhou", "error": "sem conexão"}
+
+            with patch("remessa_musicas.cli.run_song", fail), patch("sys.stderr", new_callable=io.StringIO) as warnings:
+                self.assertFalse(await execute(manifest, root / "audio", False, root / "logs"))
+            self.assertEqual(called, ["Primeira"])
+            self.assertIn("link repetido", warnings.getvalue())
+            self.assertEqual(len(json.loads((root / "retomada.json").read_text())["items"]), 1)
+
     # Simula volumes diferentes entre /tmp e Músicas durante a publicação do MP3.
     async def test_conversion_publishes_across_filesystems(self):
         with tempfile.TemporaryDirectory() as temp:
