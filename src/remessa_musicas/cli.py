@@ -478,7 +478,7 @@ async def execute(manifest, destination, resume, logs=None):
     counts = {status: sum(isinstance(row, dict) and row.get("status") == status for row in current) for status in ("concluido", "falhou")}
     log_message(f"Resultado: {counts['concluido']} concluídos, {counts['falhou']} falhos. Relatório: {state_path}")
     if queue["items"]:
-        log_message(f"Retomada: {retry_path} — use 'musics -r' ou 'musics -r -dir'.")
+        log_message(f"Retomada: {retry_path} — use 'musics -r' ou 'musics -r -f'.")
     return not counts["falhou"]
 
 
@@ -515,11 +515,11 @@ def manifest_from_retry(item):
 
 # Retoma a primeira faixa pendente ou todos os itens de uma fila, preservando as demais.
 def resume_queue(args):
-    path = Path(args.directory).expanduser() if args.directory else Path.cwd() / "downloads" / "retomada.json"
+    path = Path(args.file).expanduser() if args.file else Path.cwd() / "downloads" / "retomada.json"
     if not path.is_file():
         raise ValueError(f"arquivo de retomada não encontrado: {path}")
     queue = read_retry_queue(path)
-    items = queue["items"] if args.directory is not None else queue["items"][:1]
+    items = queue["items"] if args.file is not None else queue["items"][:1]
     if not items:
         print("Nenhuma música pendente para retomar.")
         return 0
@@ -684,9 +684,8 @@ def build_parser():
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("-dg", "--diagnose", action="store_true", help="verifica as dependências")
     actions.add_argument("-v", "--validate", type=Path, metavar="ARQUIVO", help="valida uma remessa YAML")
-    actions.add_argument("-d", "--download", type=Path, metavar="ARQUIVO", help="baixa uma remessa")
     actions.add_argument("-r", "--resume", nargs="?", const=True, type=Path, metavar="ARQUIVO", help="retoma uma faixa pendente ou uma remessa indicada")
-    parser.add_argument("-dir", "--directory", nargs="?", const="", metavar="ARQUIVO", help="com -r, retoma uma lista; sem caminho, usa downloads/retomada.json")
+    parser.add_argument("-f", "--file", nargs="?", const="", metavar="ARQUIVO", help="com -r, retoma uma lista; sem caminho, usa downloads/retomada.json")
     parser.add_argument("-de", "--destination", type=Path, metavar="PASTA",
                         default=None, help="substitui a pasta de músicas padrão")
     parser.add_argument("-y", "--yes", action="store_true", help="confirma a execução sem perguntar")
@@ -696,18 +695,18 @@ def build_parser():
 
 
 # Define as opções para cadastrar uma faixa ou importar uma lista de faixas.
-def build_add_parser():
-    parser = PortugueseParser(prog="music add", add_help=False, allow_abbrev=False,
-                              description="Adiciona uma música ou importa uma lista de músicas.")
+def build_add_parser(command="add"):
+    parser = PortugueseParser(prog=f"music {command}", add_help=False, allow_abbrev=False,
+                              description="Remove músicas da biblioteca." if command == "rm" else "Adiciona uma música ou importa uma lista de músicas.")
     parser._optionals.title = "Opções"
     parser.add_argument("-h", "--help", action="help", help="mostra esta ajuda e sai")
-    parser.add_argument("-dir", "--directory", nargs="?", const="", metavar="ARQUIVO",
-                        help="importa várias músicas de um arquivo CSV ou TXT; sem arquivo, pergunta o caminho")
+    parser.add_argument("-f", "--file", nargs="?", const="", metavar="ARQUIVO",
+                        help="lê músicas de um arquivo CSV, TXT ou YAML; sem arquivo, pergunta o caminho")
     parser.add_argument("-de", "--destination", type=Path, metavar="PASTA",
                         help="substitui a pasta de músicas padrão")
-    parser.add_argument("-y", "--yes", action="store_true", help="confirma a importação sem perguntar")
-    parser.add_argument("-dl", "--downloads", type=int, metavar="N", help="define downloads simultâneos dentro do limite da máquina")
-    parser.add_argument("-c", "--conversions", type=int, metavar="N", help="define conversões simultâneas dentro do limite da máquina")
+    parser.add_argument("-y", "--yes", action="store_true", help="confirma a operação sem perguntar")
+    parser.add_argument("-dl", "--downloads", type=int, metavar="N", help="ignorado na remoção, que é sequencial" if command == "rm" else "define downloads simultâneos dentro do limite da máquina")
+    parser.add_argument("-c", "--conversions", type=int, metavar="N", help="ignorado na remoção, que é sequencial" if command == "rm" else "define conversões simultâneas dentro do limite da máquina")
     return parser
 
 
@@ -720,33 +719,114 @@ def logs_for_file(path: Path):
 # Solicita os dados e inicia o download de uma ou várias faixas.
 def add_songs(argv):
     args = build_add_parser().parse_args(argv)
-    if args.directory is None:
+    if args.file is None:
         album = input("Nome do álbum: ").strip()
         name = input("Nome da música: ").strip()
         url = input("URL da música: ").strip()
         manifest = manifest_from_rows([(album, name, url)])
         logs = Path.cwd() / "downloads" / f"add-{manifest['songs'][0]['key']}"
     else:
-        path = Path(args.directory or input("Caminho do arquivo CSV ou TXT: ").strip()).expanduser()
-        manifest = read_song_list(path)
+        path = Path(args.file or input("Caminho do arquivo CSV, TXT ou YAML: ").strip()).expanduser()
+        manifest = read_song_list(path) if path.suffix.casefold() in {".txt", ".csv"} else read_manifest(path)
         logs = logs_for_file(path)
     destination = args.destination.expanduser() if args.destination else music_directory()
     print(f"Remessa: {len(manifest['albums'])} álbum(ns), {len(manifest['songs'])} música(s) | destino: {destination}")
     if not check_tools():
         return 1
-    if args.directory is not None and not args.yes and input("Você tem autorização para baixar esses itens e deseja continuar? [s/N] ").strip().casefold() not in {"s", "sim"}:
+    if args.file is not None and not args.yes and input("Você tem autorização para baixar esses itens e deseja continuar? [s/N] ").strip().casefold() not in {"s", "sim"}:
         print("Cancelado.")
         return 0
     choose_concurrency(manifest, args)
     return 0 if asyncio.run(execute_with_loading(manifest, destination, True, logs)) else 1
 
 
+# Lê apenas álbum e nome para remover faixas, aceitando listas com ou sem URL.
+def read_removal_list(path):
+    rows = []
+    with path.open(encoding="utf-8-sig", newline="") as source:
+        if path.suffix.casefold() == ".csv":
+            reader = csv.DictReader(source)
+            if not reader.fieldnames or not {"album", "nome"}.issubset(reader.fieldnames):
+                raise ValueError("CSV de remoção deve conter as colunas album,nome (url é opcional)")
+            rows = [(row.get("album"), row.get("nome")) for row in reader]
+        elif path.suffix.casefold() == ".txt":
+            for number, line in enumerate(source, 1):
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                fields = line.strip().split("|")
+                if len(fields) not in {2, 3}:
+                    raise ValueError(f"TXT, linha {number}: esperado álbum | nome [| URL]")
+                rows.append((fields[0].strip(), fields[1].strip()))
+        elif path.suffix.casefold() in {".yaml", ".yml"}:
+            data = yaml.safe_load(source)
+            if not isinstance(data, dict) or not isinstance(data.get("albuns"), list):
+                raise ValueError("YAML de remoção deve conter albuns com nome e musicas")
+            for album in data["albuns"]:
+                if not isinstance(album, dict) or not isinstance(album.get("musicas"), list):
+                    raise ValueError("álbum inválido no YAML de remoção")
+                for song in album["musicas"]:
+                    if not isinstance(song, dict):
+                        raise ValueError("música inválida no YAML de remoção")
+                    rows.append((album.get("nome"), song.get("nome")))
+        else:
+            raise ValueError("use um arquivo CSV, TXT ou YAML para remover músicas")
+    if not rows:
+        raise ValueError("a lista de remoção está vazia")
+    return rows
+
+
+# Localiza apenas áudios solicitados, mostra o plano e remove após confirmação.
+def remove_songs(argv):
+    args = build_add_parser("rm").parse_args(argv)
+    if args.file is None:
+        rows = [(input("Nome do álbum: ").strip(), input("Nome da música (sem extensão): ").strip())]
+    else:
+        path = Path(args.file or input("Caminho do arquivo CSV, TXT ou YAML: ").strip()).expanduser()
+        rows = read_removal_list(path)
+    base = (args.destination.expanduser() if args.destination else music_directory()).resolve()
+    targets, seen = [], set()
+    extensions = {".mp3", ".m4a", ".opus", ".webm", ".ogg", ".mp4", ".aac", ".flac", ".wav", ".mka"}
+    for album, name in rows:
+        album, name = safe_name(album), safe_name(name)
+        folder = base / album
+        if folder.is_symlink() or folder.resolve().parent != base:
+            raise ValueError(f"pasta de álbum insegura: {folder}")
+        matches = [file for file in folder.iterdir() if file.stem.casefold() == name.casefold() and file.suffix.casefold() in extensions and file.is_file() and not file.is_symlink()] if folder.is_dir() else []
+        if not matches:
+            print(f"Aviso: música não encontrada: {album}/{name}", file=sys.stderr)
+        for file in sorted(matches):
+            if file not in seen:
+                targets.append(file)
+                seen.add(file)
+    if not targets:
+        print("Nenhum áudio encontrado para remover.")
+        return 0
+    print("Arquivos que serão removidos:")
+    for file in targets:
+        print(f"  {file}")
+    if not args.yes and input(f"Excluir definitivamente {len(targets)} arquivo(s)? [s/N] ").strip().casefold() not in {"s", "sim"}:
+        print("Cancelado.")
+        return 0
+    failures = 0
+    for file in targets:
+        try:
+            if file.parent.is_symlink() or file.parent.resolve().parent != base or file.is_symlink() or not file.is_file():
+                raise ValueError(f"arquivo alterado ou inseguro: {file}")
+            file.unlink()
+            print(f"Removido: {file}")
+        except (OSError, ValueError) as exc:
+            failures += 1
+            print(f"Falha ao remover: {exc}", file=sys.stderr)
+    print(f"Resultado: {len(targets) - failures} removidos, {failures} falhos.")
+    return 1 if failures else 0
+
+
 # Interpreta os argumentos e encaminha a operação solicitada pelo usuário.
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] == "add":
+    if argv and argv[0] in {"add", "rm"}:
         try:
-            return add_songs(argv[1:])
+            return remove_songs(argv[1:]) if argv[0] == "rm" else add_songs(argv[1:])
         except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError, EOFError) as exc:
             print(f"Erro: {exc}", file=sys.stderr)
             return 2
@@ -755,18 +835,18 @@ def main(argv=None):
             return 130
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.directory is not None and (args.resume is None or args.resume is not True):
-        parser.error("use -r -dir [ARQUIVO]")
+    if args.file is not None and (args.resume is None or args.resume is not True):
+        parser.error("use -r -f [ARQUIVO]")
     try:
         if args.diagnose:
             return 0 if check_tools() else 1
-        if args.resume is True and (not args.directory or Path(args.directory).suffix.casefold() == ".json"):
+        if args.resume is True and (not args.file or Path(args.file).suffix.casefold() == ".json"):
             return resume_queue(args)
-        if args.directory:
-            manifest_path = Path(args.directory).expanduser()
+        if args.file:
+            manifest_path = Path(args.file).expanduser()
             manifest = read_song_list(manifest_path) if manifest_path.suffix.casefold() in {".txt", ".csv"} else read_manifest(manifest_path)
         else:
-            manifest_path = args.validate or args.download or args.resume
+            manifest_path = args.validate or args.resume
             manifest = read_song_list(manifest_path) if args.resume and manifest_path.suffix.casefold() in {".txt", ".csv"} else read_manifest(manifest_path)
         destination = args.destination.expanduser() if args.destination else music_directory()
         logs = logs_for_file(manifest_path)
@@ -786,7 +866,7 @@ def main(argv=None):
         print(f"Erro: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        print("Interrompido; use 'musics -r -dir' para continuar.", file=sys.stderr)
+        print("Interrompido; use 'musics -r -f' para continuar.", file=sys.stderr)
         return 130
 
 

@@ -81,7 +81,7 @@ Links repetidos no mesmo álbum também geram um aviso: somente a primeira faixa
 
 ```bash
 musics -v minha-remessa.yaml
-musics -d minha-remessa.yaml
+music add -f minha-remessa.yaml
 musics -r minha-remessa.yaml
 ```
 
@@ -91,15 +91,15 @@ O programa mantém automaticamente `downloads/retomada.json` no diretório de on
 
 ```bash
 musics -r                         # retoma somente a primeira faixa pendente
-musics -r -dir                    # retoma todas as faixas da fila padrão
-musics -r -dir outra/retomada.json # retoma uma fila indicada
-musics -r -dir lista.csv          # retoma uma lista CSV (também aceita TXT e YAML)
+musics -r -f                    # retoma todas as faixas da fila padrão
+musics -r -f outra/retomada.json # retoma uma fila indicada
+musics -r -f lista.csv          # retoma uma lista CSV (também aceita TXT e YAML)
 musics -r remessa.yaml            # forma anterior continua disponível
 ```
 
 Use `-y` para dispensar a confirmação ou `-de PASTA` para escolher outro destino. Se não houver pendências, o programa informa isso e encerra sem baixar. O arquivo JSON é gerenciado pelo programa; conserve-o separado dos logs de sessão. Os arquivos de retomada são criados a partir das execuções desta versão; falhas anteriores podem ser processadas novamente com a lista original para entrar na fila.
 
-Na retomada interativa, após confirmar a execução, o programa pergunta se você deseja alterar algum link. Se responder `s`, mostra álbum, faixa e URL atual de cada item e pede uma nova URL. Pressione Enter para manter o link da faixa. Links inválidos geram um aviso e uma nova pergunta. A URL substituta é salva na fila de retomada e será usada nas próximas tentativas se a faixa falhar novamente. Isso funciona com `musics -r -dir`, com um arquivo indicado e também com `musics -r`. CSV, TXT e YAML originais não são alterados; para reutilizar a substituição, retome pela fila JSON. A opção `-y` pula a edição e usa os links já salvos.
+Na retomada interativa, após confirmar a execução, o programa pergunta se você deseja alterar algum link. Se responder `s`, mostra álbum, faixa e URL atual de cada item e pede uma nova URL. Pressione Enter para manter o link da faixa. Links inválidos geram um aviso e uma nova pergunta. A URL substituta é salva na fila de retomada e será usada nas próximas tentativas se a faixa falhar novamente. Isso funciona com `musics -r -f`, com um arquivo indicado e também com `musics -r`. CSV, TXT e YAML originais não são alterados; para reutilizar a substituição, retome pela fila JSON. A opção `-y` pula a edição e usa os links já salvos.
 
 ### Adição interativa e importação de listas
 
@@ -122,10 +122,10 @@ Ou um TXT UTF-8, com uma faixa por linha no formato `álbum | nome | URL` (linha
 ```
 
 ```bash
-music add -dir lista.csv
-music add -dir lista.txt
-music add -dir               # pergunta o caminho do arquivo
-music add -dir lista.csv -y  # dispensa a confirmação da importação
+music add -f lista.csv
+music add -f lista.txt
+music add -f               # pergunta o caminho do arquivo
+music add -f lista.csv -y  # dispensa a confirmação da importação
 ```
 
 Os nomes de álbum podem se repetir entre linhas; as faixas serão agrupadas na mesma pasta. Se o nome de uma música se repetir no mesmo álbum, o programa avisa e ignora as ocorrências posteriores, preservando a primeira. Também é possível usar `-de PASTA` para escolher outro destino. Uma nova execução com a mesma lista retoma faixas concluídas pelo mesmo comando; os logs e o estado ficam em `downloads/`.
@@ -136,21 +136,37 @@ Os áudios são salvos na pasta de músicas do usuário (`Músicas/<álbum>` no 
 | --- | --- | --- |
 | Diagnosticar dependências | `-dg` | `--diagnose` |
 | Validar remessa | `-v ARQUIVO` | `--validate ARQUIVO` |
-| Baixar remessa | `-d ARQUIVO` | `--download ARQUIVO` |
+| Baixar remessa | `add -f ARQUIVO` | `add --file ARQUIVO` |
 | Retomar uma faixa pendente | `-r` | `--resume` |
-| Retomar uma lista ou fila | `-r -dir [ARQUIVO]` | `--resume --directory [ARQUIVO]` |
+| Retomar uma lista ou fila | `-r -f [ARQUIVO]` | `--resume --file [ARQUIVO]` |
 | Retomar remessa indicada | `-r ARQUIVO` | `--resume ARQUIVO` |
 | Escolher destino | `-de PASTA` | `--destination PASTA` |
 | Confirmar execução | `-y` | `--yes` |
 | Exibir ajuda | `-h` | `--help` |
 
-Escolha uma operação por execução. As formas `-dg` e `-de` evitam a colisão com `-d`. Exemplo: `musics -d minha-remessa.yaml -de ./audio -y`. Os nomes dos comandos estão em inglês; mensagens e ajuda permanecem em português. As chaves do YAML continuam em português.
+Escolha uma operação por execução. As formas `-dg` e `-de` distinguem diagnóstico e destino. Exemplo: `music add -f minha-remessa.yaml -de ./audio -y`. Os nomes dos comandos estão em inglês; mensagens e ajuda permanecem em português. As chaves do YAML continuam em português.
+
+### Remover músicas
+
+```bash
+music rm                         # pergunta álbum e nome da música, sem extensão
+music rm -f lista.csv             # remove faixas listadas no arquivo
+music rm -f                      # pergunta o caminho do arquivo
+music rm -f lista.txt -de ./audio # escolhe a pasta base
+music rm -f remessa.yaml -y       # mostra o plano e exclui sem perguntar
+```
+
+`musics rm` também funciona. O programa mostra os caminhos encontrados e pede confirmação antes de excluir definitivamente. Remove somente arquivos de áudio com o nome solicitado na pasta do álbum; não apaga pastas, logs ou arquivos de outros tipos. Um nome pode corresponder a vários formatos: todos aparecem na confirmação. Faixas não encontradas geram um aviso, e itens repetidos só são removidos uma vez. Links simbólicos não são seguidos.
+
+É possível reutilizar as listas de `add`. Na remoção, a URL é opcional: CSV precisa das colunas `album,nome`; TXT usa `álbum | nome`; YAML usa `albuns`, `nome` e `musicas`, sem precisar de `url`. As flags de concorrência de `add` são aceitas por `rm` por compatibilidade, mas a exclusão é sequencial. A remoção não exige yt-dlp ou FFmpeg.
+
+**Mudança de comandos:** `-dir`/`--directory` foram substituídas por `-f`/`--file`. `-d`/`--download` foram removidas; use `music add -f arquivo.yaml` para baixar remessas, incluindo YAML. Na retomada, use `musics -r -f [ARQUIVO]`.
 
 ### Variações e erros ao digitar flags
 
-As flags aceitam um ou dois hífens e letras maiúsculas ou minúsculas: `--dir`, `-directory`, `-download` e `--DOWNLOAD` funcionam como suas formas documentadas. Hífens tipográficos copiados de mensagens (`–` e `—`) também são reconhecidos. Isso vale para `music add` e para as operações de `musics`, inclusive retomada. Caminhos e valores preservam sua escrita original; para um nome de arquivo que começa com hífen, use `--download=-lista.yaml` ou um caminho como `./-lista.yaml`.
+As flags aceitam um ou dois hífens e letras maiúsculas ou minúsculas: `--f`, `-file`, `-validate` e `--VALIDATE` funcionam como suas formas documentadas. Hífens tipográficos copiados de mensagens (`–` e `—`) também são reconhecidos. Isso vale para `music add` e para as operações de `musics`, inclusive retomada. Caminhos e valores preservam sua escrita original; para um nome de arquivo que começa com hífen, use `--file=-lista.yaml` ou um caminho como `./-lista.yaml`.
 
-Se você escrever `musics --downlod lista.yaml`, o programa informa que a flag é desconhecida e sugere `--download`. Erros de escrita recebem sugestões para você escolher e executar novamente; abreviações parciais e flags curtas combinadas, como `-dy`, não são aceitas. Quando faltar um valor ou houver conflito entre operações, a mensagem explica o problema em português.
+Se você escrever `musics --validte lista.yaml`, o programa informa que a flag é desconhecida e sugere `--validate`. Erros de escrita recebem sugestões para você escolher e executar novamente; abreviações parciais e flags curtas combinadas, como `-dy`, não são aceitas. Quando faltar um valor ou houver conflito entre operações, a mensagem explica o problema em português.
 
 Durante o processamento, o terminal exibe um spinner, uma barra de progresso em magenta, músicas processadas/total, sucessos, falhas e tempo decorrido. Os contadores `D` e `C` indicam downloads e conversões ativos; em terminais largos, os rótulos aparecem por extenso e incluem a fila. A porcentagem considera faixas encerradas (sucessos ou falhas), não os bytes baixados. A barra se adapta à largura do terminal e o cursor é restaurado ao concluir ou cancelar. Não requer uma flag adicional. Saídas redirecionadas e `TERM=dumb` usam mensagens simples; `NO_COLOR=1` desativa cores, e terminais sem Unicode recebem caracteres ASCII.
 
@@ -159,8 +175,8 @@ No terminal interativo, antes de processar, o programa pergunta quantos download
 O teto de cada escolha é `max(1, floor(processadores disponíveis × 0,75))`, considerando a afinidade do processo quando disponível. Downloads e conversões compartilham esse mesmo orçamento de tarefas ativas: com 8 processadores lógicos, são até 6 tarefas no total. O FFmpeg usa uma thread de decodificação e uma de codificação por conversão e limita também as threads de filtros. Os padrões continuam 5 downloads e 2 conversões, reduzidos automaticamente quando ultrapassam o teto da máquina; valores salvos no YAML ou na fila também são adaptados com aviso. Flags e escolhas interativas acima do teto são rejeitadas. Essa política reduz a concorrência; ela não garante CPU abaixo de 75%, pois uso de CPU, I/O, codecs e outros processos variam.
 
 ```bash
-music add -dir lista.csv -dl 3 -c 2
-musics -r -dir --downloads 3 --conversions 1
+music add -f lista.csv -dl 3 -c 2
+musics -r -f --downloads 3 --conversions 1
 ```
 
 `original` preserva o contêiner de áudio obtido, como `.webm` ou `.m4a`. Nos demais formatos, a conversão pode perder qualidade e um bitrate maior não recupera detalhes ausentes da fonte.

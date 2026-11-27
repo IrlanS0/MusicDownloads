@@ -13,6 +13,57 @@ from remessa_musicas.cli import build_parser, build_add_parser, execute, loading
 
 
 class CommandTests(unittest.TestCase):
+    # Exclui somente os áudios pedidos e respeita o cancelamento interativo.
+    def test_remove_single_and_cancel(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            album = root / "Álbum"
+            album.mkdir()
+            audio = album / "Faixa.mp3"
+            audio.write_bytes(b"audio")
+            (album / "Faixa.txt").write_text("conservar")
+            (album / "Outra.mp3").write_bytes(b"outra")
+            with patch("builtins.input", side_effect=["Álbum", "Faixa", "n"]), patch("remessa_musicas.cli.check_tools") as tools:
+                self.assertEqual(main(["rm", "-de", temp]), 0)
+                self.assertTrue(audio.exists())
+                tools.assert_not_called()
+            with patch("builtins.input", side_effect=["Álbum", "Faixa", "s"]):
+                self.assertEqual(main(["rm", "-de", temp]), 0)
+            self.assertFalse(audio.exists())
+            self.assertTrue((album / "Faixa.txt").exists())
+            self.assertTrue((album / "Outra.mp3").exists())
+
+    # Remove listas com ou sem URL e rejeita caminhos que escapem da biblioteca.
+    def test_remove_files_and_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = root / "audio"
+            (base / "Álbum").mkdir(parents=True)
+            for extension, content in (("csv", "album,nome\nÁlbum,Faixa\nÁlbum,Faixa\n"), ("txt", "Álbum | Faixa | https://youtu.be/ignored\n"), ("yaml", "albuns:\n- nome: Álbum\n  musicas:\n  - nome: Faixa\n")):
+                path = root / f"lista.{extension}"
+                path.write_text(content, encoding="utf-8")
+                audio = base / "Álbum" / "Faixa.mp3"
+                audio.write_bytes(b"audio")
+                self.assertEqual(main(["rm", "-f", str(path), "-de", str(base), "-y"]), 0)
+                self.assertFalse(audio.exists())
+            outside = root / "fora"
+            outside.mkdir()
+            (outside / "Faixa.mp3").write_bytes(b"preservar")
+            (base / "Atalho").symlink_to(outside, target_is_directory=True)
+            for album in ("../fora", "Atalho"):
+                with patch("builtins.input", side_effect=[album, "Faixa"]), patch("sys.stderr", new_callable=io.StringIO):
+                    self.assertEqual(main(["rm", "-de", str(base), "-y"]), 2)
+            self.assertTrue((outside / "Faixa.mp3").exists())
+
+    # Rejeita as flags substituídas sem iniciar qualquer operação.
+    def test_removed_flags_are_rejected(self):
+        for argv in (["-d", "lista.yaml"], ["--download", "lista.yaml"], ["add", "-dir", "lista.csv"]):
+            with patch("sys.stderr", new_callable=io.StringIO), patch("remessa_musicas.cli.check_tools") as tools:
+                with self.assertRaises(SystemExit) as error:
+                    main(argv)
+                self.assertEqual(error.exception.code, 2)
+                tools.assert_not_called()
+
     # Verifica arredondamento, entrada interativa inválida e limites informados por flags.
     def test_concurrency_choices(self):
         for cores, expected in ((1, 1), (2, 1), (4, 3), (8, 6)):
@@ -31,27 +82,27 @@ class CommandTests(unittest.TestCase):
     # Aceita variantes inequívocas sem alterar nomes de arquivos ou valores com sinais.
     def test_flag_spelling_variants(self):
         parser = build_parser()
-        for flag in ("-download", "--DOWNLOAD", "–download", "—download"):
+        for flag in ("-validate", "--VALIDATE", "–validate", "—validate"):
             args = parser.parse_args([flag, "Minha Lista.YAML", "--de=PASTA Com Espaços"])
-            self.assertEqual(args.download, Path("Minha Lista.YAML"))
+            self.assertEqual(args.validate, Path("Minha Lista.YAML"))
             self.assertEqual(args.destination, Path("PASTA Com Espaços"))
-        args = parser.parse_args(["--r", "--dir", "Lista.CSV", "--y"])
+        args = parser.parse_args(["--r", "--f", "Lista.CSV", "--y"])
         self.assertIs(args.resume, True)
-        self.assertEqual(args.directory, "Lista.CSV")
+        self.assertEqual(args.file, "Lista.CSV")
         self.assertTrue(args.yes)
-        args = build_add_parser().parse_args(["--DIR=Minha Lista.csv", "-destination", "audio"])
-        self.assertEqual(args.directory, "Minha Lista.csv")
+        args = build_add_parser().parse_args(["--FILE=Minha Lista.csv", "-destination", "audio"])
+        self.assertEqual(args.file, "Minha Lista.csv")
         self.assertEqual(args.destination, Path("audio"))
-        args = parser.parse_args(["--download=-lista.yaml"])
-        self.assertEqual(args.download, Path("-lista.yaml"))
+        args = parser.parse_args(["--validate=-lista.yaml"])
+        self.assertEqual(args.validate, Path("-lista.yaml"))
 
     # Sugere correções e não inicia downloads quando uma flag desconhecida é usada.
     def test_unknown_flags_and_actionable_errors(self):
-        for argv, expected in ((["--downlod", "lista.yaml"], "--download"),
-                               (["-r", "--diretory"], "--directory"),
+        for argv, expected in ((["--validte", "lista.yaml"], "--validate"),
+                               (["-r", "--fiel"], "--file"),
                                (["add", "--destinaton", "audio"], "--destination"),
-                               (["--downlod=lista.yaml"], "--download"),
-                               (["-d"], "esperado um argumento")):
+                               (["--validte=lista.yaml"], "--validate"),
+                               (["-v"], "esperado um argumento")):
             with self.subTest(argv=argv), patch("sys.stderr", new_callable=io.StringIO) as output, patch("remessa_musicas.cli.check_tools") as tools:
                 with self.assertRaises(SystemExit) as error:
                     main(argv)
@@ -75,7 +126,7 @@ class CommandTests(unittest.TestCase):
                 queue.parent.mkdir()
                 queue.write_text(json.dumps({"version": 1, "items": [retry_entry(manifest["songs"][0], manifest, root / "audio", logs)]}))
                 with patch("remessa_musicas.cli.check_tools", return_value=True), patch("remessa_musicas.cli.execute_with_loading", return_value=False) as run, patch("builtins.input", side_effect=["s", "s", "https://youtu.be/new"]):
-                    self.assertEqual(main(["-r", "-dir", str(source), "-de", str(root / "audio")]), 1)
+                    self.assertEqual(main(["-r", "-f", str(source), "-de", str(root / "audio")]), 1)
             self.assertEqual(run.call_args.args[0]["songs"][0]["url"], "https://youtu.be/new")
             self.assertEqual(json.loads(queue.read_text())["items"][0]["url"], "https://youtu.be/new")
             self.assertEqual(source.read_text(encoding="utf-8"), content)
@@ -104,22 +155,22 @@ class CommandTests(unittest.TestCase):
                 return True
 
             with patch("remessa_musicas.cli.check_tools", return_value=True), patch("remessa_musicas.cli.execute_with_loading", side_effect=fake_execute) as run, patch("builtins.input", return_value="s"):
-                self.assertEqual(main(["add", "-dir", str(path)]), 0)
+                self.assertEqual(main(["add", "-f", str(path)]), 0)
             self.assertEqual(run.call_args.args[0]["albums"], ["Álbum 1", "Álbum 2"])
 
     # Verifica aliases e conflitos nas flags com prefixos compartilhados.
     def test_flags(self):
         parser = build_parser()
-        for short, long, field in (("-v", "--validate", "validate"), ("-d", "--download", "download"), ("-r", "--resume", "resume")):
+        for short, long, field in (("-v", "--validate", "validate"), ("-r", "--resume", "resume")):
             self.assertEqual(getattr(parser.parse_args([short, "test.yaml"]), field), Path("test.yaml"))
             self.assertEqual(getattr(parser.parse_args([long, "test.yaml"]), field), Path("test.yaml"))
         self.assertTrue(parser.parse_args(["-dg"]).diagnose)
-        args = parser.parse_args(["-d", "test.yaml", "-de", "audio", "-y"])
+        args = parser.parse_args(["-v", "test.yaml", "-de", "audio", "-y"])
         self.assertEqual(args.destination, Path("audio"))
         self.assertTrue(args.yes)
         with patch("sys.stderr", new_callable=io.StringIO) as output:
             with self.assertRaises(SystemExit) as error:
-                parser.parse_args(["-dg", "-d", "test.yaml"])
+                parser.parse_args(["-dg", "-v", "test.yaml"])
             self.assertEqual(error.exception.code, 2)
             self.assertIn("argumentos inválidos", output.getvalue())
 
@@ -402,15 +453,15 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
                 remaining = json.loads(default_queue.read_text())["items"]
                 self.assertEqual(len(remaining), 1)
                 with patch("remessa_musicas.cli.run_song", fail), patch("builtins.input", side_effect=["s", "s", "https://example.com/invalido", "https://youtu.be/replacement"]), patch("sys.stderr", new_callable=io.StringIO) as warnings:
-                    self.assertEqual(await asyncio.to_thread(main, ["-r", "-dir"]), 1)
+                    self.assertEqual(await asyncio.to_thread(main, ["-r", "-f"]), 1)
                 edited = json.loads(default_queue.read_text())["items"]
                 self.assertEqual(len(edited), 1)
                 self.assertEqual(edited[0]["url"], "https://youtu.be/replacement")
                 self.assertIn("somente URLs HTTPS do YouTube", warnings.getvalue())
                 with patch("builtins.input", side_effect=["s", "s", ""]):
-                    self.assertEqual(await asyncio.to_thread(main, ["-r", "-dir", str(default_queue)]), 0)
+                    self.assertEqual(await asyncio.to_thread(main, ["-r", "-f", str(default_queue)]), 0)
                 self.assertEqual(json.loads(default_queue.read_text())["items"], [])
-                self.assertEqual(await asyncio.to_thread(main, ["-r", "-dir", str(default_queue), "-y"]), 0)
+                self.assertEqual(await asyncio.to_thread(main, ["-r", "-f", str(default_queue), "-y"]), 0)
 
 
 if __name__ == "__main__":

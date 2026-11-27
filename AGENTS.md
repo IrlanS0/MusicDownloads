@@ -17,14 +17,16 @@ O programa deve ser um orquestrador robusto de ferramentas locais. Nao automatiz
 - CLI: argparse ou Typer, escolhendo uma unica opcao durante a implementacao.
 - Comandos planejados:
   - `music add` / `musics add`: coleta album, nome e URL de uma faixa e inicia o download.
-  - `music add -dir <lista.csv|lista.txt>`: importa varias faixas agrupadas por album, com CSV `album,nome,url` ou TXT `album | nome | URL`; `-dir` sem argumento pergunta o caminho.
+  - `music rm` / `musics rm`: pergunta album e nome para remover audio; `rm -f [arquivo]` aceita CSV/TXT/YAML com URLs opcionais. Mostrar arquivos e confirmar antes de excluir (ou usar -y); nao seguir links simbolicos, nao excluir pastas/logs/outros tipos de arquivo. Flags de concorrencia aceitas por compatibilidade, sem efeito na exclusao sequencial.
+  - `music add -f <lista.csv|lista.txt>`: importa varias faixas agrupadas por album, com CSV `album,nome,url` ou TXT `album | nome | URL`; `-f` sem argumento pergunta o caminho.
   - `musics -dg` / `musics --diagnose`
   - `musics -v <remessa.yaml>` / `musics --validate <remessa.yaml>`
-  - `musics -d <remessa.yaml>` / `musics --download <remessa.yaml>`
+  - `music add -f <remessa.yaml>` / `musics add --file <remessa.yaml>`
   - `musics -r <remessa.yaml>` / `musics --resume <remessa.yaml>`
   - `musics -r`: retoma a primeira faixa da fila automatica `downloads/retomada.json`.
-  - `musics -r -dir [arquivo]`: retoma toda a fila padrao, uma fila JSON indicada ou uma lista CSV/TXT/YAML indicada.
+  - `musics -r -f [arquivo]`: retoma toda a fila padrao, uma fila JSON indicada ou uma lista CSV/TXT/YAML indicada.
 - Flags auxiliares: `-de`/`--destination`, `-y`/`--yes`, `-h`/`--help`.
+- Usar -f/--file em vez de -dir/--directory. Remover -d/--download; baixar remessas com add -f, incluindo YAML.
 - Comandos em ingles; mensagens e ajuda em portugues. YAML permanece em portugues.
 - Aceitar variantes de flags com um/dois hifens, maiusculas e hifens tipograficos. Sugerir flags proximas para erros de escrita sem executar a sugestao automaticamente. Manter valores/caminhos intactos, rejeitar abreviacoes e flags combinadas e explicar ausencia de argumento/conflitos em portugues.
 - Mostrar spinner Unicode, barra magenta, contagem de faixas processadas, sucessos/falhas, downloads/conversoes ativos e tempo decorrido. Adaptar a largura; porcentagem por faixas encerradas, incluindo falhas. Restaurar cursor ao concluir/cancelar; desativar animacao em saida redirecionada e TERM=dumb, respeitar NO_COLOR e oferecer ASCII sem Unicode.
