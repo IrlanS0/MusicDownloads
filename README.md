@@ -154,6 +154,15 @@ Se você escrever `musics --downlod lista.yaml`, o programa informa que a flag �
 
 Durante o processamento, o terminal exibe um spinner, uma barra de progresso em magenta, músicas processadas/total, sucessos, falhas e tempo decorrido. Os contadores `D` e `C` indicam downloads e conversões ativos; em terminais largos, os rótulos aparecem por extenso e incluem a fila. A porcentagem considera faixas encerradas (sucessos ou falhas), não os bytes baixados. A barra se adapta à largura do terminal e o cursor é restaurado ao concluir ou cancelar. Não requer uma flag adicional. Saídas redirecionadas e `TERM=dumb` usam mensagens simples; `NO_COLOR=1` desativa cores, e terminais sem Unicode recebem caracteres ASCII.
 
-Até cinco itens podem ser baixados ao mesmo tempo e até dois convertidos. Valores menores podem ser definidos no YAML. `original` preserva o contêiner de áudio obtido, como `.webm` ou `.m4a`. Nos demais formatos, a conversão pode perder qualidade e um bitrate maior não recupera detalhes ausentes da fonte.
+No terminal interativo, antes de processar, o programa pergunta quantos downloads e conversões simultâneos você deseja. Enter mantém os valores sugeridos. Você também pode usar `-dl N`/`--downloads N` e `-c N`/`--conversions N`, inclusive no `music add` e na retomada. Com `-y` ou entrada redirecionada, usa as flags ou as configurações salvas sem perguntar. A barra exibe contagem ativa/limite escolhido para cada etapa.
+
+O teto de cada escolha é `max(1, floor(processadores disponíveis × 0,75))`, considerando a afinidade do processo quando disponível. Downloads e conversões compartilham esse mesmo orçamento de tarefas ativas: com 8 processadores lógicos, são até 6 tarefas no total. O FFmpeg usa uma thread de decodificação e uma de codificação por conversão e limita também as threads de filtros. Os padrões continuam 5 downloads e 2 conversões, reduzidos automaticamente quando ultrapassam o teto da máquina; valores salvos no YAML ou na fila também são adaptados com aviso. Flags e escolhas interativas acima do teto são rejeitadas. Essa política reduz a concorrência; ela não garante CPU abaixo de 75%, pois uso de CPU, I/O, codecs e outros processos variam.
+
+```bash
+music add -dir lista.csv -dl 3 -c 2
+musics -r -dir --downloads 3 --conversions 1
+```
+
+`original` preserva o contêiner de áudio obtido, como `.webm` ou `.m4a`. Nos demais formatos, a conversão pode perder qualidade e um bitrate maior não recupera detalhes ausentes da fonte.
 
 Ao interromper com Ctrl+C, arquivos temporários são descartados; `musics -r ARQUIVO` baixa novamente itens ainda não concluídos. O resultado final de cada item só é publicado após terminar a conversão. Atualizações da plataforma, indisponibilidade de vídeos e restrições de acesso podem causar falhas individuais.

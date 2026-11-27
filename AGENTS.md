@@ -56,7 +56,7 @@ albuns:
         url: "https://www.youtube.com/watch?v=..."
 ```
 
-Os limites aceitos pela primeira versao devem ser, no maximo, cinco downloads simultaneos e duas conversoes simultaneas. Valores ausentes usam esses limites como padrao; valores acima deles devem ser rejeitados ou reduzidos com aviso explicito.
+O teto de concorrencia e max(1, floor(processadores logicos disponiveis * 0.75)), considerando afinidade quando possivel. Perguntar downloads/conversoes no terminal interativo; permitir -dl/--downloads e -c/--conversions. Padroes 5/2 adaptados ao teto; configuracoes salvas acima do teto sao reduzidas com aviso e novas escolhas fora do limite sao rejeitadas. Com -y ou stdin redirecionado nao perguntar. Exibir limites escolhidos no resumo e na barra. Isso limita tarefas, sem garantir um percentual exato de CPU.
 
 ## Pipeline e concorrencia
 
@@ -64,12 +64,12 @@ Usar duas filas independentes:
 
 1. Validar remessa e itens.
 2. Enfileirar itens validos para download.
-3. Executar ate 5 downloads simultaneos.
+3. Executar downloads conforme o limite escolhido.
 4. Ao terminar cada download, enfileirar o arquivo para conversao.
-5. Executar ate 2 conversoes simultaneas.
+5. Executar conversoes conforme o limite escolhido.
 6. Mover o resultado concluido para a pasta final e registrar o resultado.
 
-Controlar os dois limites separadamente, por exemplo com `asyncio.Semaphore`. Nao multiplicar acidentalmente a concorrencia usando varios fragmentos simultaneos por item; na primeira versao, manter a concorrencia interna de fragmentos do `yt-dlp` em 1.
+Controlar os dois limites separadamente com `asyncio.Semaphore` e um semaforo compartilhado com o teto global. Manter fragmentos simultaneos do yt-dlp em 1 e limitar threads do FFmpeg para decodificacao, codificacao e filtros.
 
 Uma falha individual nao deve cancelar toda a remessa. Implementar novas tentativas com espera progressiva, registro do erro e possibilidade de retomada.
 
@@ -131,7 +131,7 @@ Inicialmente, nao empacotar tudo em um executavel unico. Manter `yt-dlp` e `ffmp
 
 - Validar uma remessa antes de iniciar.
 - Pedir confirmacao interativa.
-- Respeitar os limites 5/2.
+- Respeitar limites escolhidos por etapa e o teto global de 75% dos processadores disponiveis.
 - Continuar apos falhas individuais.
 - Produzir nomes seguros e resultados deterministas.
 - Gerar relatorio final de concluidos, ignorados e falhos.

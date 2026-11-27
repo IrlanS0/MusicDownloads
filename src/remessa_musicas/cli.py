@@ -25,6 +25,44 @@ import yaml
 FORMATS = {"mp3", "m4a", "opus", "original"}
 
 
+# Calcula um orçamento de tarefas a partir dos processadores disponíveis ao processo.
+def concurrency_budget():
+    try:
+        cores = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        cores = os.cpu_count() or 1
+    return max(1, cores * 3 // 4)
+
+
+# Valida configurações salvas e adapta valores antigos ao limite desta máquina.
+def bounded_concurrency(value, name):
+    value = integer(value, name, 1, sys.maxsize)
+    limit = concurrency_budget()
+    if value > limit:
+        log_message(f"Aviso: {name} reduzido de {value} para {limit}, conforme o processador disponível.", file=sys.stderr)
+    return min(value, limit)
+
+
+# Solicita a concorrência no terminal ou aplica flags e valores padrão sem interação.
+def choose_concurrency(manifest, args):
+    limit = concurrency_budget()
+    print(f"Limite desta máquina: {limit} tarefa(s) ativa(s) no total (75% dos processadores lógicos, mínimo 1).")
+    for field, label in (("downloads", "Downloads simultâneos"), ("conversions", "Conversões simultâneas")):
+        value = getattr(args, field, None)
+        default = min(manifest["config"][field], limit)
+        if value is None and not args.yes and sys.stdin.isatty():
+            while True:
+                entered = input(f"{label} [1–{limit}; Enter = {default}]: ").strip()
+                try:
+                    value = integer(int(entered) if entered else default, label, 1, limit)
+                    break
+                except ValueError:
+                    print(f"Aviso: informe um inteiro entre 1 e {limit}.", file=sys.stderr)
+        value = default if value is None else integer(value, label, 1, limit)
+        manifest["config"][field] = value
+    print(f"Downloads simultâneos: {manifest['config']['downloads']} | Conversões simultâneas: {manifest['config']['conversions']}")
+
+
 # Identifica o vídeo independentemente do domínio, da playlist e de parâmetros extras.
 def video_identity(url):
     parsed = urlparse(url.strip())
@@ -128,8 +166,8 @@ def validate_manifest(data: dict) -> dict:
     if not isinstance(config, dict):
         raise ValueError("execucao deve ser um objeto")
     limits = {
-        "downloads": integer(config.get("downloads_simultaneos", 5), "downloads_simultaneos", 1, 5),
-        "conversions": integer(config.get("conversoes_simultaneas", 2), "conversoes_simultaneas", 1, 2),
+        "downloads": bounded_concurrency(config.get("downloads_simultaneos", min(5, concurrency_budget())), "downloads_simultaneos"),
+        "conversions": bounded_concurrency(config.get("conversoes_simultaneas", min(2, concurrency_budget())), "conversoes_simultaneas"),
         "attempts": integer(config.get("tentativas", 3), "tentativas", 1, 10),
         "delay": integer(config.get("intervalo_tentativas", 3), "intervalo_tentativas", 0, 60),
     }
@@ -272,11 +310,11 @@ def loading_line(progress, frame):
     if width < 55:
         return f"{frame} {finished}/{total} | {failed} falhas | {clock}"[:max(1, width - 1)]
     if width >= 115:
-        detail = f"OK {done} | falhas {failed} | download {states.count('download')} | conversão {states.count('conversao')} | fila {states.count('fila')}"
+        detail = f"OK {done} | falhas {failed} | download {states.count('download')}/{progress.get('downloads', 5)} | conversão {states.count('conversao')}/{progress.get('conversions', 2)} | fila {states.count('fila')}"
     elif width < 75:
         detail = f"falhas {failed}"
     else:
-        detail = f"OK {done} !{failed} D:{states.count('download')} C:{states.count('conversao')}"
+        detail = f"OK {done} !{failed} D:{states.count('download')}/{progress.get('downloads', 5)} C:{states.count('conversao')}/{progress.get('conversions', 2)}"
     fixed = f"{frame} [] {ratio:3.0%} {finished}/{total} | {detail} | {clock}"
     bar_width = min(24, max(1, width - len(fixed) - 1))
     filled = int(bar_width * ratio)
@@ -335,7 +373,7 @@ async def run_song(song, manifest, destination, download_limit, convert_limit, l
         for attempt in range(1, manifest["config"]["attempts"] + 1):
             try:
                 log_message(f"[{song['name']}] download (tentativa {attempt})")
-                async with download_limit:
+                async with download_limit, manifest.get("_work_limit", asyncio.Semaphore(concurrency_budget())):
                     song_stage(manifest, song, "download")
                     await process(["yt-dlp", "--ignore-config", "--no-playlist", "--no-overwrites", "--concurrent-fragments", "1", "-f", "bestaudio/best", "-o", str(temp / "audio.%(ext)s"), song["url"]], log)
                 song_stage(manifest, song, "fila")
@@ -343,7 +381,7 @@ async def run_song(song, manifest, destination, download_limit, convert_limit, l
                 if len(candidates) != 1:
                     raise RuntimeError("download não produziu exatamente um arquivo de áudio")
                 source = candidates[0]
-                async with convert_limit:
+                async with convert_limit, manifest.get("_work_limit", asyncio.Semaphore(concurrency_budget())):
                     song_stage(manifest, song, "conversao")
                     log_message(f"[{song['name']}] conversão")
                     fmt = manifest["format"]
@@ -356,7 +394,7 @@ async def run_song(song, manifest, destination, download_limit, convert_limit, l
                         os.replace(source, staging)
                     else:
                         codec = {"mp3": "libmp3lame", "m4a": "aac", "opus": "libopus"}[fmt]
-                        await process(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-vn", "-map", "0:a:0", "-c:a", codec, "-b:a", f"{manifest['quality']}k", str(staging)], log)
+                        await process(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-threads", "1", "-filter_threads", "1", "-i", str(source), "-vn", "-map", "0:a:0", "-c:a", codec, "-threads", "1", "-b:a", f"{manifest['quality']}k", str(staging)], log)
                         if not staging.is_file() or not staging.stat().st_size:
                             raise RuntimeError("conversão não produziu arquivo válido")
                     # Copia primeiro para o mesmo volume do destino; o rename final é atômico.
@@ -397,13 +435,14 @@ async def execute(manifest, destination, resume, logs=None):
     queue = read_retry_queue(retry_path)
     songs, ignored = unique_song_links(manifest["songs"])
     manifest = {**manifest, "songs": songs}
+    manifest["_work_limit"] = asyncio.Semaphore(concurrency_budget())
     if "_progress" in manifest:
         manifest["_progress"]["states"] = {song["key"]: "fila" for song in songs}
     ignored_entries = [retry_entry(song, manifest, destination, logs) for song in ignored]
     queue["items"] = [item for item in queue["items"] if item not in ignored_entries]
     entries = [retry_entry(song, manifest, destination, logs) for song in manifest["songs"]]
     for entry in entries:
-        queue["items"] = [item for item in queue["items"] if item != entry]
+        queue["items"] = [item for item in queue["items"] if any(item.get(key) != entry[key] for key in ("album", "name", "url", "destination", "logs", "format", "quality"))]
         queue["items"].append(entry)
     retry_path.parent.mkdir(parents=True, exist_ok=True)
     write_state(retry_path, queue)
@@ -497,6 +536,11 @@ def resume_queue(args):
         for item in ignored:
             queue["items"].remove(item)
         write_state(path, queue)
+    selected = manifest_from_retry(items[0])
+    choose_concurrency(selected, args)
+    for item in items:
+        item["config"].update({field: selected["config"][field] for field in ("downloads", "conversions")})
+    write_state(path, queue)
     groups = {}
     for item in items:
         manifest = manifest_from_retry(item)
@@ -577,7 +621,8 @@ async def execute_with_loading(manifest, destination, resume, logs):
     except (UnicodeEncodeError, LookupError):
         unicode_output = False
     progress = {"states": {song["key"]: "fila" for song in manifest["songs"]},
-                "started": time.monotonic(), "unicode": unicode_output}
+                "started": time.monotonic(), "unicode": unicode_output,
+                "downloads": manifest["config"]["downloads"], "conversions": manifest["config"]["conversions"]}
     async with loading_indicator(progress):
         return await execute({**manifest, "_progress": progress}, destination, resume, logs)
 
@@ -603,13 +648,14 @@ class PortugueseParser(argparse.ArgumentParser):
                 suggestions.append(suggestion)
         detail = f"flag desconhecida: {option!r}."
         if suggestions:
-            detail += " Você quis dizer " + ", ".join(suggestions) + "?"
+            detail += "\nVocê quis dizer " + ", ".join(suggestions) + "?"
         self.error(detail)
 
     # Apresenta erros de argumentos em português, preservando os nomes das flags.
     def error(self, message):
         self.print_usage(sys.stderr)
         for original, translated in (("expected one argument", "esperado um argumento"),
+                                     ("invalid int value", "esperado um número inteiro"),
                                      ("not allowed with argument", "não pode ser usado com"),
                                      ("one of the arguments", "uma das opções"),
                                      ("the following arguments are required", "as seguintes opções são obrigatórias"),
@@ -644,6 +690,8 @@ def build_parser():
     parser.add_argument("-de", "--destination", type=Path, metavar="PASTA",
                         default=None, help="substitui a pasta de músicas padrão")
     parser.add_argument("-y", "--yes", action="store_true", help="confirma a execução sem perguntar")
+    parser.add_argument("-dl", "--downloads", type=int, metavar="N", help="define downloads simultâneos dentro do limite da máquina")
+    parser.add_argument("-c", "--conversions", type=int, metavar="N", help="define conversões simultâneas dentro do limite da máquina")
     return parser
 
 
@@ -658,6 +706,8 @@ def build_add_parser():
     parser.add_argument("-de", "--destination", type=Path, metavar="PASTA",
                         help="substitui a pasta de músicas padrão")
     parser.add_argument("-y", "--yes", action="store_true", help="confirma a importação sem perguntar")
+    parser.add_argument("-dl", "--downloads", type=int, metavar="N", help="define downloads simultâneos dentro do limite da máquina")
+    parser.add_argument("-c", "--conversions", type=int, metavar="N", help="define conversões simultâneas dentro do limite da máquina")
     return parser
 
 
@@ -687,6 +737,7 @@ def add_songs(argv):
     if args.directory is not None and not args.yes and input("Você tem autorização para baixar esses itens e deseja continuar? [s/N] ").strip().casefold() not in {"s", "sim"}:
         print("Cancelado.")
         return 0
+    choose_concurrency(manifest, args)
     return 0 if asyncio.run(execute_with_loading(manifest, destination, True, logs)) else 1
 
 
@@ -729,6 +780,7 @@ def main(argv=None):
             return 0
         if args.resume and not args.yes:
             edit_manifest_links(manifest, destination, logs)
+        choose_concurrency(manifest, args)
         return 0 if asyncio.run(execute_with_loading(manifest, destination, bool(args.resume), logs)) else 1
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError, EOFError) as exc:
         print(f"Erro: {exc}", file=sys.stderr)

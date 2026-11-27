@@ -3,15 +3,31 @@ import errno
 import io
 import json
 import os
+from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from remessa_musicas.cli import build_parser, build_add_parser, execute, loading_indicator, loading_line, main, music_directory, prune_sessions, read_manifest, read_song_list, retry_entry, logs_for_file, run_song, manifest_from_rows
+from remessa_musicas.cli import build_parser, build_add_parser, execute, loading_indicator, loading_line, main, music_directory, prune_sessions, read_manifest, read_song_list, retry_entry, logs_for_file, run_song, manifest_from_rows, concurrency_budget, choose_concurrency
 
 
 class CommandTests(unittest.TestCase):
+    # Verifica arredondamento, entrada interativa inválida e limites informados por flags.
+    def test_concurrency_choices(self):
+        for cores, expected in ((1, 1), (2, 1), (4, 3), (8, 6)):
+            with patch("remessa_musicas.cli.os.sched_getaffinity", return_value=set(range(cores)), create=True):
+                self.assertEqual(concurrency_budget(), expected)
+        manifest = {"config": {"downloads": 5, "conversions": 2}}
+        args = SimpleNamespace(downloads=None, conversions=None, yes=False)
+        with patch("remessa_musicas.cli.concurrency_budget", return_value=3), patch("sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=["4", "2", "0", "1"]), patch("sys.stderr", new_callable=io.StringIO):
+            choose_concurrency(manifest, args)
+        self.assertEqual(manifest["config"], {"downloads": 2, "conversions": 1})
+        args.downloads = 4
+        with patch("remessa_musicas.cli.concurrency_budget", return_value=3):
+            with self.assertRaises(ValueError):
+                choose_concurrency(manifest, args)
+
     # Aceita variantes inequívocas sem alterar nomes de arquivos ou valores com sinais.
     def test_flag_spelling_variants(self):
         parser = build_parser()
@@ -41,6 +57,8 @@ class CommandTests(unittest.TestCase):
                     main(argv)
                 self.assertEqual(error.exception.code, 2)
                 self.assertIn(expected, output.getvalue())
+                if "quis dizer" in output.getvalue():
+                    self.assertIn("\nVocê quis dizer", output.getvalue())
                 tools.assert_not_called()
 
     # Confere que editar a retomada CSV atualiza a fila sem modificar o arquivo original.
@@ -192,6 +210,32 @@ class ManifestTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.IsolatedAsyncioTestCase):
+    # Garante que download e conversão compartilhem o orçamento, mesmo com limites maiores.
+    async def test_shared_concurrency_budget(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = manifest_from_rows([("Álbum", str(index), f"https://youtu.be/video{index}") for index in range(4)])
+            manifest["_retry_file"] = root / "retomada.json"
+            active = peak = 0
+
+            async def fake_process(command, log):
+                nonlocal active, peak
+                active += 1
+                peak = max(peak, active)
+                try:
+                    await asyncio.sleep(0.005)
+                    if command[0] == "yt-dlp":
+                        Path(command[command.index("-o") + 1].replace("%(ext)s", "webm")).write_bytes(b"audio")
+                    else:
+                        self.assertEqual(command.count("-threads"), 2)
+                        Path(command[-1]).write_bytes(b"mp3")
+                finally:
+                    active -= 1
+
+            with patch("remessa_musicas.cli.concurrency_budget", return_value=1), patch("remessa_musicas.cli.process", fake_process):
+                self.assertTrue(await execute(manifest, root / "audio", False, root / "logs"))
+            self.assertEqual(peak, 1)
+
     # Detecta duplicatas surgidas na retomada antes de enfileirar downloads concorrentes.
     async def test_duplicate_links_before_execution(self):
         with tempfile.TemporaryDirectory() as temp:
