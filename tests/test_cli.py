@@ -8,10 +8,41 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from remessa_musicas.cli import build_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, read_song_list, retry_entry, logs_for_file, run_song, manifest_from_rows
+from remessa_musicas.cli import build_parser, build_add_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, read_song_list, retry_entry, logs_for_file, run_song, manifest_from_rows
 
 
 class CommandTests(unittest.TestCase):
+    # Aceita variantes inequívocas sem alterar nomes de arquivos ou valores com sinais.
+    def test_flag_spelling_variants(self):
+        parser = build_parser()
+        for flag in ("-download", "--DOWNLOAD", "–download", "—download"):
+            args = parser.parse_args([flag, "Minha Lista.YAML", "--de=PASTA Com Espaços"])
+            self.assertEqual(args.download, Path("Minha Lista.YAML"))
+            self.assertEqual(args.destination, Path("PASTA Com Espaços"))
+        args = parser.parse_args(["--r", "--dir", "Lista.CSV", "--y"])
+        self.assertIs(args.resume, True)
+        self.assertEqual(args.directory, "Lista.CSV")
+        self.assertTrue(args.yes)
+        args = build_add_parser().parse_args(["--DIR=Minha Lista.csv", "-destination", "audio"])
+        self.assertEqual(args.directory, "Minha Lista.csv")
+        self.assertEqual(args.destination, Path("audio"))
+        args = parser.parse_args(["--download=-lista.yaml"])
+        self.assertEqual(args.download, Path("-lista.yaml"))
+
+    # Sugere correções e não inicia downloads quando uma flag desconhecida é usada.
+    def test_unknown_flags_and_actionable_errors(self):
+        for argv, expected in ((["--downlod", "lista.yaml"], "--download"),
+                               (["-r", "--diretory"], "--directory"),
+                               (["add", "--destinaton", "audio"], "--destination"),
+                               (["--downlod=lista.yaml"], "--download"),
+                               (["-d"], "esperado um argumento")):
+            with self.subTest(argv=argv), patch("sys.stderr", new_callable=io.StringIO) as output, patch("remessa_musicas.cli.check_tools") as tools:
+                with self.assertRaises(SystemExit) as error:
+                    main(argv)
+                self.assertEqual(error.exception.code, 2)
+                self.assertIn(expected, output.getvalue())
+                tools.assert_not_called()
+
     # Confere que editar a retomada CSV atualiza a fila sem modificar o arquivo original.
     def test_resume_csv_edits_url(self):
         with tempfile.TemporaryDirectory() as temp:

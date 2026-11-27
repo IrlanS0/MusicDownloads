@@ -5,6 +5,7 @@ import asyncio
 import csv
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from difflib import get_close_matches
 import hashlib
 import itertools
 import json
@@ -526,10 +527,42 @@ async def execute_with_loading(manifest, destination, resume, logs):
 
 
 class PortugueseParser(argparse.ArgumentParser):
+    # Reconhece variações de hífen e maiúsculas e sugere flags próximas quando há erro.
+    def _parse_optional(self, arg_string):
+        normalized = arg_string.translate(str.maketrans({"–": "-", "—": "--", "−": "-"}))
+        if not normalized.startswith("-") or normalized in {"-", "--"}:
+            return super()._parse_optional(arg_string)
+        option, separator, value = normalized.partition("=")
+        aliases = {name.lstrip("-").casefold(): name for name in self._option_string_actions}
+        name = option.lstrip("-").casefold()
+        if name in aliases:
+            canonical = aliases[name]
+            return super()._parse_optional(canonical + (separator + value if separator else ""))
+        matches = get_close_matches(name, aliases, n=3, cutoff=0.6)
+        suggestions = []
+        for match in matches:
+            action = self._option_string_actions[aliases[match]]
+            suggestion = next((flag for flag in action.option_strings if flag.startswith("--")), aliases[match])
+            if suggestion not in suggestions:
+                suggestions.append(suggestion)
+        detail = f"flag desconhecida: {option!r}."
+        if suggestions:
+            detail += " Você quis dizer " + ", ".join(suggestions) + "?"
+        self.error(detail)
+
     # Apresenta erros de argumentos em português, preservando os nomes das flags.
     def error(self, message):
         self.print_usage(sys.stderr)
-        self.exit(2, f"Erro: argumentos inválidos ou conflitantes. Consulte '{self.prog} -h'.\n")
+        for original, translated in (("expected one argument", "esperado um argumento"),
+                                     ("not allowed with argument", "não pode ser usado com"),
+                                     ("one of the arguments", "uma das opções"),
+                                     ("the following arguments are required", "as seguintes opções são obrigatórias"),
+                                     ("is required", "é obrigatória"),
+                                     ("ignored explicit argument", "valor não permitido"),
+                                     ("unrecognized arguments", "argumentos desconhecidos"),
+                                     ("argument ", "opção ")):
+            message = message.replace(original, translated)
+        self.exit(2, f"Erro: argumentos inválidos ou conflitantes. {message}\nConsulte '{self.prog} -h'.\n")
 
     # Traduz o rótulo de uso produzido pelo argparse.
     def format_usage(self):

@@ -26,6 +26,7 @@ O programa deve ser um orquestrador robusto de ferramentas locais. Nao automatiz
   - `musics -r -dir [arquivo]`: retoma toda a fila padrao, uma fila JSON indicada ou uma lista CSV/TXT/YAML indicada.
 - Flags auxiliares: `-de`/`--destination`, `-y`/`--yes`, `-h`/`--help`.
 - Comandos em ingles; mensagens e ajuda em portugues. YAML permanece em portugues.
+- Aceitar variantes de flags com um/dois hifens, maiusculas e hifens tipograficos. Sugerir flags proximas para erros de escrita sem executar a sugestao automaticamente. Manter valores/caminhos intactos, rejeitar abreviacoes e flags combinadas e explicar ausencia de argumento/conflitos em portugues.
 - Mostrar indicador giratorio durante o processamento em terminal interativo; limpar ao terminar ou cancelar e desativar em saida redirecionada.
 - Salvar audio em pasta de Musicas padrao do SO, mais subpasta por album. Uma remessa YAML pode definir varios albuns em `albuns: [{nome, musicas: [{nome, url}]}]`. Logs e estado ficam no `downloads/<identificador-da-remessa>` do diretorio de trabalho; conservar tres sessoes recentes de logs, preservando `resultado.json` para retomada.
 - Quando uma faixa tiver o mesmo nome de outra no mesmo album, avisar e manter apenas a primeira ocorrencia; albuns diferentes podem conter nomes de faixa iguais.

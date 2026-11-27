@@ -146,6 +146,12 @@ Os áudios são salvos na pasta de músicas do usuário (`Músicas/<álbum>` no 
 
 Escolha uma operação por execução. As formas `-dg` e `-de` evitam a colisão com `-d`. Exemplo: `musics -d minha-remessa.yaml -de ./audio -y`. Os nomes dos comandos estão em inglês; mensagens e ajuda permanecem em português. As chaves do YAML continuam em português.
 
+### Variações e erros ao digitar flags
+
+As flags aceitam um ou dois hífens e letras maiúsculas ou minúsculas: `--dir`, `-directory`, `-download` e `--DOWNLOAD` funcionam como suas formas documentadas. Hífens tipográficos copiados de mensagens (`–` e `—`) também são reconhecidos. Isso vale para `music add` e para as operações de `musics`, inclusive retomada. Caminhos e valores preservam sua escrita original; para um nome de arquivo que começa com hífen, use `--download=-lista.yaml` ou um caminho como `./-lista.yaml`.
+
+Se você escrever `musics --downlod lista.yaml`, o programa informa que a flag é desconhecida e sugere `--download`. Erros de escrita recebem sugestões para você escolher e executar novamente; abreviações parciais e flags curtas combinadas, como `-dy`, não são aceitas. Quando faltar um valor ou houver conflito entre operações, a mensagem explica o problema em português.
+
 Durante o processamento, um indicador giratório mostra que há tarefas em andamento. Ele indica atividade, sem estimar porcentagem, e é desativado automaticamente quando a saída é redirecionada para arquivo. Não requer uma flag adicional.
 
 Até cinco itens podem ser baixados ao mesmo tempo e até dois convertidos. Valores menores podem ser definidos no YAML. `original` preserva o contêiner de áudio obtido, como `.webm` ou `.m4a`. Nos demais formatos, a conversão pode perder qualidade e um bitrate maior não recupera detalhes ausentes da fonte.
