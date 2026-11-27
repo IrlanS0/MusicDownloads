@@ -152,7 +152,7 @@ As flags aceitam um ou dois hífens e letras maiúsculas ou minúsculas: `--dir`
 
 Se você escrever `musics --downlod lista.yaml`, o programa informa que a flag é desconhecida e sugere `--download`. Erros de escrita recebem sugestões para você escolher e executar novamente; abreviações parciais e flags curtas combinadas, como `-dy`, não são aceitas. Quando faltar um valor ou houver conflito entre operações, a mensagem explica o problema em português.
 
-Durante o processamento, um indicador giratório mostra que há tarefas em andamento. Ele indica atividade, sem estimar porcentagem, e é desativado automaticamente quando a saída é redirecionada para arquivo. Não requer uma flag adicional.
+Durante o processamento, o terminal exibe um spinner, uma barra de progresso em magenta, músicas processadas/total, sucessos, falhas e tempo decorrido. Os contadores `D` e `C` indicam downloads e conversões ativos; em terminais largos, os rótulos aparecem por extenso e incluem a fila. A porcentagem considera faixas encerradas (sucessos ou falhas), não os bytes baixados. A barra se adapta à largura do terminal e o cursor é restaurado ao concluir ou cancelar. Não requer uma flag adicional. Saídas redirecionadas e `TERM=dumb` usam mensagens simples; `NO_COLOR=1` desativa cores, e terminais sem Unicode recebem caracteres ASCII.
 
 Até cinco itens podem ser baixados ao mesmo tempo e até dois convertidos. Valores menores podem ser definidos no YAML. `original` preserva o contêiner de áudio obtido, como `.webm` ou `.m4a`. Nos demais formatos, a conversão pode perder qualidade e um bitrate maior não recupera detalhes ausentes da fonte.
 

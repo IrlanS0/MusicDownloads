@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from remessa_musicas.cli import build_parser, build_add_parser, execute, loading_indicator, main, music_directory, prune_sessions, read_manifest, read_song_list, retry_entry, logs_for_file, run_song, manifest_from_rows
+from remessa_musicas.cli import build_parser, build_add_parser, execute, loading_indicator, loading_line, main, music_directory, prune_sessions, read_manifest, read_song_list, retry_entry, logs_for_file, run_song, manifest_from_rows
 
 
 class CommandTests(unittest.TestCase):
@@ -259,10 +259,11 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
     # Confere a animação, sua limpeza e a ausência de códigos de terminal em logs.
     async def test_loading_indicator_cleanup(self):
         terminal = io.StringIO()
-        with patch.object(terminal, "isatty", return_value=True), patch("sys.stderr", terminal):
+        with patch.object(terminal, "isatty", return_value=True), patch("sys.stderr", terminal), patch.dict("os.environ", {"TERM": "xterm-256color"}):
             async with loading_indicator():
                 await asyncio.sleep(0.15)
-        self.assertIn("Processando remessa...", terminal.getvalue())
+        self.assertIn("0/0", terminal.getvalue())
+        self.assertIn("\033[?25h", terminal.getvalue())
         self.assertTrue(terminal.getvalue().endswith("\r\033[2K"))
         redirected = io.StringIO()
         with patch("sys.stderr", redirected):
@@ -270,10 +271,29 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0)
         self.assertEqual(redirected.getvalue(), "")
 
+    # Confere contadores reais, largura responsiva e suporte a terminais sem cores.
+    async def test_progress_counters_and_terminal_fallback(self):
+        progress = {"states": {"a": "concluido", "b": "falhou", "c": "download", "d": "conversao", "e": "fila"}, "started": 100, "unicode": True}
+        with patch("remessa_musicas.cli.time.monotonic", return_value=165), patch.dict("os.environ", {"NO_COLOR": "1"}):
+            for width in (30, 55, 80, 120):
+                with patch("remessa_musicas.cli.shutil.get_terminal_size", return_value=os.terminal_size((width, 24))):
+                    line = loading_line(progress, "⠋")
+                self.assertLess(len(line), width)
+                self.assertIn("2/5", line)
+                self.assertIn("01:05", line)
+                self.assertNotIn("\033", line)
+            self.assertIn("download 1", line)
+            self.assertIn("conversão 1", line)
+        terminal = io.StringIO()
+        with patch.object(terminal, "isatty", return_value=True), patch("sys.stderr", terminal), patch.dict("os.environ", {"TERM": "dumb"}):
+            async with loading_indicator(progress):
+                await asyncio.sleep(0)
+        self.assertEqual(terminal.getvalue(), "")
+
     # Confere se a animação é limpa mesmo ao cancelar o processamento.
     async def test_loading_indicator_cancelled(self):
         terminal = io.StringIO()
-        with patch.object(terminal, "isatty", return_value=True), patch("sys.stderr", terminal):
+        with patch.object(terminal, "isatty", return_value=True), patch("sys.stderr", terminal), patch.dict("os.environ", {"TERM": "xterm-256color"}):
             with self.assertRaises(asyncio.CancelledError):
                 async with loading_indicator():
                     await asyncio.sleep(0)

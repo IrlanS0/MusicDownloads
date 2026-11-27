@@ -252,32 +252,72 @@ async def process(command: list[str], log: Path):
 
 # Limpa a linha da animação antes de escrever uma mensagem em português.
 def log_message(message, *, file=None, flush=True):
-    if sys.stderr.isatty():
+    if sys.stderr.isatty() and os.environ.get("TERM") != "dumb":
         sys.stderr.write("\r\033[2K")
         sys.stderr.flush()
     print(message, file=file, flush=flush)
 
 
-# Atualiza um indicador visual enquanto as tarefas de áudio estão em execução.
-async def animate_loading():
-    for frame in itertools.cycle("|/-\\"):
-        sys.stderr.write(f"\r{frame} Processando remessa...")
+# Monta uma linha de progresso adaptada à largura e à codificação do terminal.
+def loading_line(progress, frame):
+    states = list(progress["states"].values())
+    total = len(states)
+    done = states.count("concluido")
+    failed = states.count("falhou")
+    finished = done + failed
+    ratio = finished / total if total else 0
+    elapsed = max(0, int(time.monotonic() - progress["started"]))
+    clock = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+    width = shutil.get_terminal_size(fallback=(80, 24)).columns
+    if width < 55:
+        return f"{frame} {finished}/{total} | {failed} falhas | {clock}"[:max(1, width - 1)]
+    if width >= 115:
+        detail = f"OK {done} | falhas {failed} | download {states.count('download')} | conversão {states.count('conversao')} | fila {states.count('fila')}"
+    elif width < 75:
+        detail = f"falhas {failed}"
+    else:
+        detail = f"OK {done} !{failed} D:{states.count('download')} C:{states.count('conversao')}"
+    fixed = f"{frame} [] {ratio:3.0%} {finished}/{total} | {detail} | {clock}"
+    bar_width = min(24, max(1, width - len(fixed) - 1))
+    filled = int(bar_width * ratio)
+    bar = "━" * filled + "─" * (bar_width - filled) if progress["unicode"] else "#" * filled + "-" * (bar_width - filled)
+    line = f"{frame} [{bar}] {ratio:3.0%} {finished}/{total} | {detail} | {clock}"
+    if os.environ.get("NO_COLOR") is None:
+        return f"\033[35m{line}\033[0m"
+    return line
+
+
+# Atualiza a barra com os resultados reais e o tempo decorrido da remessa.
+async def animate_loading(progress=None):
+    progress = progress or {"states": {}, "started": time.monotonic(), "unicode": True}
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if progress["unicode"] else "|/-\\"
+    for frame in itertools.cycle(frames):
+        sys.stderr.write("\r\033[2K" + loading_line(progress, frame))
         sys.stderr.flush()
-        await asyncio.sleep(0.12)
+        await asyncio.sleep(0.1)
 
 
 # Mantém a animação ativa no terminal e garante sua limpeza ao terminar.
 @asynccontextmanager
-async def loading_indicator():
-    animation = asyncio.create_task(animate_loading()) if sys.stderr.isatty() else None
+async def loading_indicator(progress=None):
+    interactive = sys.stderr.isatty() and os.environ.get("TERM") != "dumb"
+    animation = asyncio.create_task(animate_loading(progress)) if interactive else None
+    if animation is not None:
+        sys.stderr.write("\033[?25l")
     try:
         yield
     finally:
         if animation is not None:
             animation.cancel()
             await asyncio.gather(animation, return_exceptions=True)
-            sys.stderr.write("\r\033[2K")
+            sys.stderr.write("\033[?25h\r\033[2K")
             sys.stderr.flush()
+
+
+# Registra a etapa atual para refletir o uso real das filas na barra de progresso.
+def song_stage(manifest, song, stage):
+    if "_progress" in manifest:
+        manifest["_progress"]["states"][song["key"]] = stage
 
 
 # Baixa e converte uma faixa, respeitando limites e novas tentativas.
@@ -296,12 +336,15 @@ async def run_song(song, manifest, destination, download_limit, convert_limit, l
             try:
                 log_message(f"[{song['name']}] download (tentativa {attempt})")
                 async with download_limit:
+                    song_stage(manifest, song, "download")
                     await process(["yt-dlp", "--ignore-config", "--no-playlist", "--no-overwrites", "--concurrent-fragments", "1", "-f", "bestaudio/best", "-o", str(temp / "audio.%(ext)s"), song["url"]], log)
+                song_stage(manifest, song, "fila")
                 candidates = [p for p in temp.glob("audio.*") if p.is_file() and not p.name.endswith((".part", ".ytdl")) and p.stat().st_size > 0]
                 if len(candidates) != 1:
                     raise RuntimeError("download não produziu exatamente um arquivo de áudio")
                 source = candidates[0]
                 async with convert_limit:
+                    song_stage(manifest, song, "conversao")
                     log_message(f"[{song['name']}] conversão")
                     fmt = manifest["format"]
                     extension = source.suffix if fmt == "original" else "." + fmt
@@ -328,6 +371,7 @@ async def run_song(song, manifest, destination, download_limit, convert_limit, l
             except asyncio.CancelledError:
                 raise
             except (OSError, RuntimeError) as exc:
+                song_stage(manifest, song, "fila")
                 error = str(exc)
                 log_message(f"[{song['name']}] falha: {error}", file=sys.stderr)
                 if attempt < manifest["config"]["attempts"] and not (album_destination / (song["name"] + ("." + manifest["format"] if manifest["format"] != "original" else ""))).exists():
@@ -353,6 +397,8 @@ async def execute(manifest, destination, resume, logs=None):
     queue = read_retry_queue(retry_path)
     songs, ignored = unique_song_links(manifest["songs"])
     manifest = {**manifest, "songs": songs}
+    if "_progress" in manifest:
+        manifest["_progress"]["states"] = {song["key"]: "fila" for song in songs}
     ignored_entries = [retry_entry(song, manifest, destination, logs) for song in ignored]
     queue["items"] = [item for item in queue["items"] if item not in ignored_entries]
     entries = [retry_entry(song, manifest, destination, logs) for song in manifest["songs"]]
@@ -368,6 +414,7 @@ async def execute(manifest, destination, resume, logs=None):
         previous = state.get(song["key"])
         if resume and isinstance(previous, dict) and previous.get("status") == "concluido" and previous.get("album") == song["album"] and isinstance(previous.get("file"), str) and previous["file"] == song["name"] + Path(previous["file"]).suffix and (destination / song["album"] / previous["file"]).is_file():
             log_message(f"[{song['name']}] já concluído")
+            song_stage(manifest, song, "concluido")
             queue["items"].remove(retry_entry(song, manifest, destination, logs))
             write_state(retry_path, queue)
             continue
@@ -376,6 +423,7 @@ async def execute(manifest, destination, resume, logs=None):
         for future in asyncio.as_completed(tasks):
             song, result = await future
             state[song["key"]] = result
+            song_stage(manifest, song, result["status"])
             write_state(state_path, state)
             if result["status"] == "concluido":
                 queue["items"].remove(retry_entry(song, manifest, destination, logs))
@@ -522,8 +570,16 @@ def prune_sessions(sessions: Path):
 
 # Executa a remessa com animação de atividade no terminal interativo.
 async def execute_with_loading(manifest, destination, resume, logs):
-    async with loading_indicator():
-        return await execute(manifest, destination, resume, logs)
+    encoding = getattr(sys.stderr, "encoding", None) or "utf-8"
+    try:
+        "⠋━".encode(encoding)
+        unicode_output = True
+    except (UnicodeEncodeError, LookupError):
+        unicode_output = False
+    progress = {"states": {song["key"]: "fila" for song in manifest["songs"]},
+                "started": time.monotonic(), "unicode": unicode_output}
+    async with loading_indicator(progress):
+        return await execute({**manifest, "_progress": progress}, destination, resume, logs)
 
 
 class PortugueseParser(argparse.ArgumentParser):
